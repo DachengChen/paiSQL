@@ -8,16 +8,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	pgx "github.com/jackc/pgx/v5"
 )
 
 // TableInfo represents a database object (table, index, view).
 type TableInfo struct {
-	Schema string
-	Name   string
-	Type   string // "table", "index", "view"
-	Owner  string
+	Schema   string
+	Name     string
+	Type     string // "table", "index", "view"
+	Owner    string
+	RowCount int64 // estimated row count (from pg_class.reltuples)
 }
 
 // QueryResult holds the output of an arbitrary SQL query.
@@ -34,11 +36,35 @@ type ExplainResult struct {
 }
 
 // ListTables implements \dt — list tables in the current database.
+// Includes estimated row counts from pg_stat_user_tables.
 func (d *DB) ListTables(ctx context.Context, schema string) ([]TableInfo, error) {
 	if schema == "" {
 		schema = "public"
 	}
-	return d.listObjects(ctx, schema, "BASE TABLE", "table")
+	query := `
+		SELECT t.table_schema, t.table_name, 'table'::text AS type, '',
+		       GREATEST(COALESCE(c.reltuples, 0), 0)::bigint
+		FROM information_schema.tables t
+		LEFT JOIN pg_class c
+		  ON c.relname = t.table_name
+		  AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
+		WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
+		ORDER BY t.table_name`
+	rows, err := d.Pool.Query(ctx, query, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []TableInfo
+	for rows.Next() {
+		var t TableInfo
+		if err := rows.Scan(&t.Schema, &t.Name, &t.Type, &t.Owner, &t.RowCount); err != nil {
+			return nil, err
+		}
+		results = append(results, t)
+	}
+	return results, rows.Err()
 }
 
 // ListIndexes implements \di — list indexes.
@@ -182,4 +208,41 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// FormatRowCount formats a row count for compact display:
+//   - under 1000: exact number (e.g. "42", "999")
+//   - 1000..999499: Xk (e.g. "1k", "999k")
+//   - 999500+: XM (e.g. "1M", "10M")
+func FormatRowCount(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 999500 {
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	}
+	return fmt.Sprintf("%dM", (n+500000)/1000000)
+}
+
+// FormatTimeAgo formats a duration since a timestamp as a compact string:
+//
+//	<60s  → "Xs"   (e.g. "5s")
+//	<60m  → "Xm"   (e.g. "30m")
+//	<24h  → "Xh"   (e.g. "2h")
+//	>=24h → "Xd"   (e.g. "3d")
+func FormatTimeAgo(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return "-"
+	}
+	d := time.Since(*t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }

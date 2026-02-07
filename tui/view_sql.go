@@ -45,10 +45,11 @@ type SQLView struct {
 	height   int
 
 	// Split view state
-	tables   []string
-	tableIdx int
-	focus    int
-	tableErr error
+	tables    []string
+	tableRows []int64 // estimated row counts per table
+	tableIdx  int
+	focus     int
+	tableErr  error
 
 	// Chat mode state
 	inputMode    int // inputModeChat or inputModeSQL
@@ -143,10 +144,13 @@ func (v *SQLView) Update(msg tea.Msg) (View, tea.Cmd) {
 	case TablesListMsg:
 		if msg.Err == nil {
 			var names []string
+			var rowCounts []int64
 			for _, t := range msg.Tables {
 				names = append(names, t.Name)
+				rowCounts = append(rowCounts, t.RowCount)
 			}
 			v.tables = names
+			v.tableRows = rowCounts
 			v.tableErr = nil
 		} else {
 			v.tableErr = msg.Err
@@ -490,7 +494,10 @@ func (v *SQLView) formatResult(r *db.QueryResult) []string {
 
 func (v *SQLView) View() string {
 	// Dimensions
-	sidebarWidth := 25
+	sidebarWidth := v.width / 5 // 20% of full width
+	if sidebarWidth < 20 {
+		sidebarWidth = 20
+	}
 	inputHeight := 5
 
 	contentWidth := v.width - sidebarWidth - 1
@@ -515,17 +522,29 @@ func (v *SQLView) View() string {
 		}
 		for i := start; i < end; i++ {
 			name := v.tables[i]
-			if len(name) > sidebarWidth-4 {
-				name = name[:sidebarWidth-4] + "…"
+			// Append row count suffix
+			suffix := ""
+			if i < len(v.tableRows) {
+				suffix = " (" + db.FormatRowCount(v.tableRows[i]) + ")"
+			}
+			display := name + suffix
+			if len(display) > sidebarWidth-4 {
+				// Truncate name but keep the suffix
+				maxName := sidebarWidth - 4 - len(suffix) - 1
+				if maxName > 0 {
+					display = name[:maxName] + "…" + suffix
+				} else {
+					display = display[:sidebarWidth-4] + "…"
+				}
 			}
 			if i == v.tableIdx {
 				if v.focus == focusSidebar {
-					tableList = append(tableList, StyleListItemActive.Render("▸ "+name))
+					tableList = append(tableList, StyleListItemActive.Render("▸ "+display))
 				} else {
-					tableList = append(tableList, StyleDimmed.Render("▸ "+name))
+					tableList = append(tableList, StyleDimmed.Render("▸ "+display))
 				}
 			} else {
-				tableList = append(tableList, StyleDimmed.Render("  "+name))
+				tableList = append(tableList, StyleDimmed.Render("  "+display))
 			}
 		}
 	} else {
