@@ -165,8 +165,11 @@ func (v *SQLView) handleSidebarKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	case "enter":
 		if len(v.tables) > 0 {
 			selected := v.tables[v.tableIdx]
-			v.input = fmt.Sprintf("SELECT * FROM %s LIMIT 100;", selected)
-			v.focus = focusInput // Jump to input to execute or edit
+			v.input = fmt.Sprintf("SELECT * FROM %s LIMIT 20;", selected)
+			// Execute immediately
+			cmd := v.execute()
+			v.focus = focusResults // Focus results to browse
+			return v, cmd
 		}
 	}
 	return v, nil
