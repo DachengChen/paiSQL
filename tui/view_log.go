@@ -149,7 +149,9 @@ func (v *LogView) fetchLog() tea.Cmd {
 		for rows.Next() {
 			var pid int
 			var user, state, query, elapsed string
-			rows.Scan(&pid, &user, &state, &query, &elapsed)
+			if err := rows.Scan(&pid, &user, &state, &query, &elapsed); err != nil {
+				return LogMsg{Err: err}
+			}
 
 			stateColor := ColorFgDim
 			if state == "active" {

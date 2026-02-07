@@ -1,0 +1,46 @@
+version: 2
+project_name: paisql
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: paisql
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+      - goos: linux
+        goarch: arm64
+        # Just examples, remove if you want all combos. But Windows/ARM64 is rare.
+      - goos: linux
+        goarch: 386
+
+archives:
+  - id: paisql
+    name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ .Tag }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
