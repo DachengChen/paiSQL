@@ -36,6 +36,7 @@ type oauthCredentials struct {
 	RefreshToken string    `json:"refresh_token"`
 	TokenType    string    `json:"token_type"`
 	ExpiresAt    time.Time `json:"expires_at"`
+	Email        string    `json:"email,omitempty"`
 }
 
 // These are injected at build time via:
@@ -114,6 +115,16 @@ func (a *Antigravity) IsLoggedIn() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.credentials != nil && a.credentials.RefreshToken != ""
+}
+
+// LoggedInEmail returns the email of the logged-in user, or empty string.
+func (a *Antigravity) LoggedInEmail() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.credentials != nil {
+		return a.credentials.Email
+	}
+	return ""
 }
 
 // Login performs the OAuth2 authorization code flow:
@@ -207,6 +218,14 @@ func (a *Antigravity) Login() (authURL string, done <-chan error, err error) {
 		a.mu.Lock()
 		a.credentials = creds
 		a.mu.Unlock()
+
+		// Fetch user email
+		if email, err := fetchUserEmail(creds.AccessToken); err == nil {
+			creds.Email = email
+			a.mu.Lock()
+			a.credentials.Email = email
+			a.mu.Unlock()
+		}
 
 		if err := saveAntigravityCredentials(creds); err != nil {
 			doneCh <- fmt.Errorf("failed to save credentials: %w", err)
@@ -459,6 +478,33 @@ func exchangeCodeForTokens(code, redirectURI string) (*oauthCredentials, error) 
 		TokenType:    tokenResp.TokenType,
 		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
 	}, nil
+}
+
+// fetchUserEmail retrieves the user's email from Google's UserInfo endpoint.
+func fetchUserEmail(accessToken string) (string, error) {
+	req, err := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("userinfo request failed: %d", resp.StatusCode)
+	}
+
+	var info struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return "", err
+	}
+	return info.Email, nil
 }
 
 // credentialsPath returns the path to the cached credentials file.

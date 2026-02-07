@@ -108,7 +108,7 @@ air
     ├── tui.go          # TUI entry point
     ├── app.go          # Root model (phases, tabs, commands)
     ├── view.go         # View interface
-    ├── view_connect.go # Connection setup form
+    ├── view_settings.go# Settings screen (connection + AI config)
     ├── viewport.go     # Scrollable viewport component
     ├── styles.go       # Color palette and shared styles
     ├── messages.go     # Async message types

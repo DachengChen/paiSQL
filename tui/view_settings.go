@@ -1,4 +1,4 @@
-// view_connect.go — Connection setup screen with integrated AI settings.
+// view_settings.go — Settings screen with connection and AI configuration.
 //
 // This is the first screen shown when paiSQL starts. It has two blocks:
 //
@@ -223,7 +223,7 @@ func (v *ConnectView) loadAIFieldsFromConfig() {
 	}
 }
 
-func (v *ConnectView) Name() string { return "Connect" }
+func (v *ConnectView) Name() string { return "Settings" }
 
 func (v *ConnectView) SetSize(width, height int) {
 	v.width = width
@@ -238,13 +238,9 @@ func (v *ConnectView) ShortHelp() []KeyBinding {
 			{Key: "Ctrl+U", Desc: "clear"},
 		}
 	}
-	blockLabel := "AI"
-	if v.block == blockAI {
-		blockLabel = "Connection"
-	}
 	return []KeyBinding{
 		{Key: "↑/↓", Desc: "navigate"},
-		{Key: "Tab", Desc: blockLabel},
+		{Key: "Tab", Desc: "switch block"},
 		{Key: "Enter", Desc: "edit/action"},
 		{Key: "Ctrl+C", Desc: "quit"},
 	}
@@ -822,19 +818,16 @@ func (v *ConnectView) saveAIConfig() tea.Cmd {
 // ─────────────────────────────────────────────────────────────
 
 func (v *ConnectView) View() string {
-	// Calculate panel widths: left panel gets 60%, right panel 40%
-	totalWidth := v.width
+	// Calculate panel widths: equal width for both panels
+	// Add horizontal padding so panels don't touch screen edges
+	sidePadding := 4 // padding on each side
+	gapWidth := 2    // gap between panels
+	totalWidth := v.width - sidePadding*2 - gapWidth
 	if totalWidth < 40 {
 		totalWidth = 40
 	}
-	leftWidth := (totalWidth * 6) / 10
+	leftWidth := totalWidth / 2
 	rightWidth := totalWidth - leftWidth
-	if leftWidth < 30 {
-		leftWidth = 30
-	}
-	if rightWidth < 25 {
-		rightWidth = 25
-	}
 
 	leftInputW := leftWidth - 24 // label + padding + border
 	rightInputW := rightWidth - 24
@@ -942,8 +935,14 @@ func (v *ConnectView) View() string {
 			// Show login status
 			ag := ai.NewAntigravity(v.fields[fieldAIModel])
 			if ag.IsLoggedIn() {
-				rightLines = append(rightLines,
-					lipgloss.NewStyle().Foreground(ColorSuccess).Render("  ✅ Logged in"))
+				email := ag.LoggedInEmail()
+				if email != "" {
+					rightLines = append(rightLines,
+						lipgloss.NewStyle().Foreground(ColorSuccess).Render("  ✅ "+email))
+				} else {
+					rightLines = append(rightLines,
+						lipgloss.NewStyle().Foreground(ColorSuccess).Render("  ✅ Logged in"))
+				}
 			} else {
 				rightLines = append(rightLines,
 					lipgloss.NewStyle().Foreground(ColorWarning).Render("  ⚠ Not logged in"))
@@ -969,7 +968,8 @@ func (v *ConnectView) View() string {
 	// Combine panels side by side
 	// ══════════════════════════════════════════
 
-	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, rightPanel)
+	gap := lipgloss.NewStyle().Width(2).Render("")
+	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gap, rightPanel)
 
 	// Status line below panels
 	var statusLine string
