@@ -1,5 +1,10 @@
 # paiSQL
 
+[![CI](https://github.com/DachengChen/paiSQL/actions/workflows/ci.yml/badge.svg)](https://github.com/DachengChen/paiSQL/actions/workflows/ci.yml)
+[![Release](https://github.com/DachengChen/paiSQL/actions/workflows/release.yml/badge.svg)](https://github.com/DachengChen/paiSQL/actions/workflows/release.yml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/DachengChen/paiSQL)](https://go.dev/)
+[![License](https://img.shields.io/github/license/DachengChen/paiSQL)](LICENSE)
+
 PostgreSQL CLI with TUI and AI assistant — featuring multi-view navigation, tail logs, explain plans, index suggestions, and keyboard-driven interface.
 
 ## Features
