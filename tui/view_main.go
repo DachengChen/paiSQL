@@ -65,7 +65,8 @@ type MainView struct {
 	pagTotal    int64  // total rows in table
 
 	// Right pane mode
-	rightMode int // rightModeData or rightModeDescribe
+	rightMode    int  // rightModeData or rightModeDescribe
+	expandedMode bool // vertical display like \x in psql
 
 	// Chat mode state
 	inputMode    int // inputModeChat or inputModeSQL
@@ -113,6 +114,8 @@ func (v *MainView) ShortHelp() []KeyBinding {
 			toggle,
 			{Key: "↑/↓", Desc: "scroll"},
 			{Key: "←/→", Desc: "pan"},
+			{Key: "[/]", Desc: "record"},
+			{Key: "x", Desc: "expand"},
 			{Key: "Tab", Desc: "focus input"},
 		}
 	}
@@ -339,9 +342,24 @@ func (v *MainView) handleResultsKey(msg tea.KeyMsg) (View, tea.Cmd) {
 		v.viewport.ScrollLeft(4)
 	case "right", "l":
 		v.viewport.ScrollRight(4)
+	case "[":
+		// In expanded mode: jump to previous record
+		if v.expandedMode && v.result != nil {
+			recordHeight := len(v.result.Columns) + 1 // columns + header
+			v.viewport.ScrollUp(recordHeight)
+		} else {
+			v.viewport.ScrollUp(5)
+		}
+	case "]":
+		// In expanded mode: jump to next record
+		if v.expandedMode && v.result != nil {
+			recordHeight := len(v.result.Columns) + 1
+			v.viewport.ScrollDown(recordHeight)
+		} else {
+			v.viewport.ScrollDown(5)
+		}
 	case "pgup":
 		if v.pagTable != "" {
-			// Database-level pagination: previous page
 			if v.pagPage > 0 {
 				v.pagPage--
 				return v, v.fetchPage()
@@ -351,7 +369,6 @@ func (v *MainView) handleResultsKey(msg tea.KeyMsg) (View, tea.Cmd) {
 		}
 	case "pgdown":
 		if v.pagTable != "" {
-			// Database-level pagination: next page
 			maxPage := v.maxPage()
 			if v.pagPage < maxPage {
 				v.pagPage++
@@ -370,6 +387,20 @@ func (v *MainView) handleResultsKey(msg tea.KeyMsg) (View, tea.Cmd) {
 		v.viewport.ScrollRight(20)
 	case "w": // wrap toggle
 		v.viewport.ToggleWrap()
+	case "x": // expanded/vertical display toggle
+		v.expandedMode = !v.expandedMode
+		if v.result != nil {
+			var lines []string
+			if v.expandedMode {
+				lines = v.formatResultExpanded(v.result)
+			} else {
+				lines = v.formatResult(v.result)
+			}
+			if v.pagTable != "" {
+				lines = append([]string{v.result.Status, ""}, lines...)
+			}
+			v.viewport.SetContentLines(lines)
+		}
 	}
 	return v, nil
 }
@@ -674,6 +705,37 @@ func (v *MainView) formatResult(r *db.QueryResult) []string {
 			}
 		}
 		lines = append(lines, strings.TrimRight(line, "│"))
+	}
+	lines = append(lines, "", r.Status)
+	return lines
+}
+
+// formatResultExpanded renders rows vertically like \x in psql.
+func (v *MainView) formatResultExpanded(r *db.QueryResult) []string {
+	if r == nil || len(r.Columns) == 0 {
+		return []string{r.Status}
+	}
+
+	runeLen := utf8.RuneCountInString
+
+	// Find max column name width for alignment
+	maxCol := 0
+	for _, col := range r.Columns {
+		if l := runeLen(col); l > maxCol {
+			maxCol = l
+		}
+	}
+
+	var lines []string
+	for rowIdx, row := range r.Rows {
+		// Record separator
+		sep := fmt.Sprintf("─[ RECORD %d ]─", rowIdx+1)
+		lines = append(lines, sep)
+		for i, cell := range row {
+			if i < len(r.Columns) {
+				lines = append(lines, fmt.Sprintf(" %-*s │ %s", maxCol, r.Columns[i], cell))
+			}
+		}
 	}
 	lines = append(lines, "", r.Status)
 	return lines
