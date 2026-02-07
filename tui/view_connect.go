@@ -281,7 +281,8 @@ func (v *ConnectView) handleEditing(msg tea.KeyMsg) (View, tea.Cmd) {
 func (v *ConnectView) handleAction() (View, tea.Cmd) {
 	switch v.focusField {
 	case fieldSaved:
-		return v, nil
+		// Directly connect using the selected saved connection
+		return v, v.connect()
 
 	case fieldSSHEnabled:
 		if v.sshEnabled() {
