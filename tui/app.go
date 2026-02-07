@@ -104,8 +104,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.connectView.SetSize(contentW, contentH)
 		} else {
 			// tab bar removed, status bar moved outside
-			// Header(1) + Status(1) + Borders(2) = 4 lines chrome
-			viewH := contentH
+			// Header(1) + Status(1) + Slack(1) + Borders(2) = 5 lines chrome
+			viewH := contentH - 1
 			for _, v := range a.views {
 				v.SetSize(contentW, viewH)
 			}
@@ -122,7 +122,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.initViews()
 		// Trigger resize for views
 		contentW := a.width - 2
-		viewH := a.height - 4 // chrome (header1 + status1 + borders2)
+		viewH := a.height - 5 // chrome (header1 + status1 + slack1 + borders2)
 		for _, v := range a.views {
 			v.SetSize(contentW, viewH)
 		}
@@ -376,15 +376,21 @@ func (a *App) View() string {
 
 	innerContent := lipgloss.JoinVertical(lipgloss.Left, innerSections...)
 
-	// Frame height = Total - Header(1) - Status(1)
+	// Frame height = Total - Header(1) - Status(1) - Slack(2)
+	frameHeight := a.height - 4
+	if frameHeight < 0 {
+		frameHeight = 0
+	}
+
 	frame := StyleBorder.
 		Width(a.width - 2).
-		Height(a.height - 2).
+		Height(frameHeight).
 		Render(innerContent)
 
 	statusBar := a.renderStatusBar()
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, frame, statusBar)
+	// Manual join to ensure order and no overlap
+	return header + "\n" + frame + "\n" + statusBar
 }
 
 // renderHeader draws a simple text bar: logo + version + connection info.
@@ -394,28 +400,30 @@ func (a *App) renderHeader() string {
 
 	left := logo + version
 
-	// Right side: connection info + screen size
-	var right string
-	if a.phase == PhaseMain && a.connName != "" {
-		right = StyleSuccess.Render("⚡ " + a.connName)
-	} else if a.phase == PhaseMain {
-		right = StyleSuccess.Render("⚡ connected")
+	// Current connection details
+	var connInfo string
+	if a.phase == PhaseMain {
+		details := fmt.Sprintf("%s@%s:%d/%s", a.cfg.User, a.cfg.Host, a.cfg.Port, a.cfg.Database)
+		label := a.connName
+		if label == "" {
+			label = "Direct"
+		}
+		connInfo = StyleSuccess.Render(fmt.Sprintf("  ⚡ %s (%s)", label, details))
 	}
 
-	// Add dimensions dimmed
-	right += "  " + StyleDimmed.Render(fmt.Sprintf("%d×%d", a.width, a.height))
+	content := left + connInfo
 
-	// Fill gap with spaces (transparent)
-	gap := a.width - lipgloss.Width(left) - lipgloss.Width(right)
+	// Fill gap to right align dimensions
+	right := StyleDimmed.Render(fmt.Sprintf("%d×%d", a.width, a.height))
+	gap := a.width - lipgloss.Width(content) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
 	filler := strings.Repeat(" ", gap)
 
-	// No background color set - relies on terminal default
 	return lipgloss.NewStyle().
 		Width(a.width).
-		Render(left + filler + right)
+		Render(content + filler + right)
 }
 
 func (a *App) renderConnectHelpBar() string {
