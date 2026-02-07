@@ -1,0 +1,373 @@
+// app.go is the top-level Bubble Tea model that orchestrates all views.
+//
+// Key design decisions:
+//   - Tab-based navigation between views.
+//   - Command mode (`:`) for psql-like commands.
+//   - Jump mode (`/`) for quick view switching.
+//   - Help overlay (`?`) toggled on/off.
+//   - Window resize propagated to all views.
+//   - The App itself does NOT run queries — it delegates to views.
+package tui
+
+import (
+	"strings"
+
+	"github.com/DachengChen/paiSQL/ai"
+	"github.com/DachengChen/paiSQL/config"
+	"github.com/DachengChen/paiSQL/db"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// Tab indices (order matters for Tab key cycling).
+const (
+	TabSQL = iota
+	TabExplain
+	TabIndex
+	TabStats
+	TabLog
+	TabAI
+)
+
+// InputMode determines what keystrokes do.
+type InputMode int
+
+const (
+	ModeNormal  InputMode = iota
+	ModeCommand           // `:` prefix — entering a psql-like command
+	ModeJump              // `/` prefix — jump to view by name
+)
+
+// App is the root Bubble Tea model.
+type App struct {
+	views      []View
+	activeTab  int
+	width      int
+	height     int
+	mode       InputMode
+	cmdInput   string // current `:` or `/` input buffer
+	showHelp   bool
+	statusMsg  string // transient message in status bar
+	db         *db.DB
+	aiProvider ai.Provider
+	cfg        config.Config
+}
+
+// NewApp creates the application with all views.
+func NewApp(database *db.DB, aiProvider ai.Provider, cfg config.Config) *App {
+	app := &App{
+		db:         database,
+		aiProvider: aiProvider,
+		cfg:        cfg,
+	}
+
+	// Register views in tab order.
+	app.views = []View{
+		NewSQLView(database),
+		NewExplainView(database),
+		NewIndexView(database, aiProvider),
+		NewStatsView(database),
+		NewLogView(database),
+		NewAIView(aiProvider),
+	}
+
+	return app
+}
+
+// Init implements tea.Model.
+func (a *App) Init() tea.Cmd {
+	// Initialize the active view
+	if len(a.views) > 0 {
+		return a.views[a.activeTab].Init()
+	}
+	return nil
+}
+
+// Update implements tea.Model.
+func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.width = msg.Width
+		a.height = msg.Height
+		// Reserve space for tab bar (1) + status bar (1) + help bar (1)
+		contentHeight := a.height - 3
+		for _, v := range a.views {
+			v.SetSize(a.width, contentHeight)
+		}
+		return a, nil
+
+	case tea.KeyMsg:
+		return a.handleKey(msg)
+	}
+
+	// Forward other messages to active view
+	if a.activeTab < len(a.views) {
+		updatedView, cmd := a.views[a.activeTab].Update(msg)
+		a.views[a.activeTab] = updatedView
+		return a, cmd
+	}
+
+	return a, nil
+}
+
+// handleKey processes keyboard input based on current mode.
+func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch a.mode {
+	case ModeCommand:
+		return a.handleCommandMode(msg)
+	case ModeJump:
+		return a.handleJumpMode(msg)
+	default:
+		return a.handleNormalMode(msg)
+	}
+}
+
+func (a *App) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return a, tea.Quit
+
+	case "tab":
+		a.activeTab = (a.activeTab + 1) % len(a.views)
+		return a, a.views[a.activeTab].Init()
+
+	case "shift+tab":
+		a.activeTab = (a.activeTab - 1 + len(a.views)) % len(a.views)
+		return a, a.views[a.activeTab].Init()
+
+	case ":":
+		a.mode = ModeCommand
+		a.cmdInput = ""
+		return a, nil
+
+	case "/":
+		a.mode = ModeJump
+		a.cmdInput = ""
+		return a, nil
+
+	case "?":
+		a.showHelp = !a.showHelp
+		return a, nil
+
+	case "1":
+		return a.switchTab(0)
+	case "2":
+		return a.switchTab(1)
+	case "3":
+		return a.switchTab(2)
+	case "4":
+		return a.switchTab(3)
+	case "5":
+		return a.switchTab(4)
+	case "6":
+		return a.switchTab(5)
+	}
+
+	// Forward to active view
+	if a.activeTab < len(a.views) {
+		updatedView, cmd := a.views[a.activeTab].Update(msg)
+		a.views[a.activeTab] = updatedView
+		return a, cmd
+	}
+
+	return a, nil
+}
+
+func (a *App) handleCommandMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		cmd := a.executeCommand(a.cmdInput)
+		a.mode = ModeNormal
+		a.cmdInput = ""
+		return a, cmd
+
+	case "escape":
+		a.mode = ModeNormal
+		a.cmdInput = ""
+		return a, nil
+
+	case "backspace":
+		if len(a.cmdInput) > 0 {
+			a.cmdInput = a.cmdInput[:len(a.cmdInput)-1]
+		}
+		return a, nil
+
+	default:
+		if len(msg.String()) == 1 {
+			a.cmdInput += msg.String()
+		}
+		return a, nil
+	}
+}
+
+func (a *App) handleJumpMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		a.jumpToView(a.cmdInput)
+		a.mode = ModeNormal
+		a.cmdInput = ""
+		return a, a.views[a.activeTab].Init()
+
+	case "escape":
+		a.mode = ModeNormal
+		a.cmdInput = ""
+		return a, nil
+
+	case "backspace":
+		if len(a.cmdInput) > 0 {
+			a.cmdInput = a.cmdInput[:len(a.cmdInput)-1]
+		}
+		return a, nil
+
+	default:
+		if len(msg.String()) == 1 {
+			a.cmdInput += msg.String()
+		}
+		return a, nil
+	}
+}
+
+func (a *App) switchTab(idx int) (tea.Model, tea.Cmd) {
+	if idx >= 0 && idx < len(a.views) {
+		a.activeTab = idx
+		return a, a.views[a.activeTab].Init()
+	}
+	return a, nil
+}
+
+func (a *App) jumpToView(name string) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for i, v := range a.views {
+		if strings.Contains(strings.ToLower(v.Name()), name) {
+			a.activeTab = i
+			return
+		}
+	}
+	a.statusMsg = "view not found: " + name
+}
+
+func (a *App) executeCommand(input string) tea.Cmd {
+	input = strings.TrimSpace(input)
+	switch {
+	case input == "q" || input == "quit":
+		return tea.Quit
+	case strings.HasPrefix(input, "dt"):
+		a.activeTab = TabSQL
+		a.statusMsg = "listing tables..."
+		return a.views[TabSQL].Init()
+	default:
+		a.statusMsg = "unknown command: " + input
+		return nil
+	}
+}
+
+// View implements tea.Model.
+func (a *App) View() string {
+	if a.width == 0 {
+		return "loading..."
+	}
+
+	var sections []string
+
+	// 1. Tab bar
+	sections = append(sections, a.renderTabBar())
+
+	// 2. Content area
+	if a.showHelp {
+		sections = append(sections, a.renderHelp())
+	} else if a.activeTab < len(a.views) {
+		sections = append(sections, a.views[a.activeTab].View())
+	}
+
+	// 3. Status / input bar
+	sections = append(sections, a.renderStatusBar())
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (a *App) renderTabBar() string {
+	var tabs []string
+	for i, v := range a.views {
+		label := v.Name()
+		if i == a.activeTab {
+			tabs = append(tabs, StyleTabActive.Render(label))
+		} else {
+			tabs = append(tabs, StyleTabInactive.Render(label))
+		}
+	}
+	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	return lipgloss.NewStyle().Width(a.width).Background(ColorBgAlt).Render(tabBar)
+}
+
+func (a *App) renderStatusBar() string {
+	var content string
+
+	switch a.mode {
+	case ModeCommand:
+		content = StylePrompt.Render(":") + a.cmdInput + "█"
+	case ModeJump:
+		content = StylePrompt.Render("/") + a.cmdInput + "█"
+	default:
+		if a.statusMsg != "" {
+			content = a.statusMsg
+		} else {
+			// Show context-aware help keys
+			helpItems := a.getHelpItems()
+			var parts []string
+			for _, h := range helpItems {
+				parts = append(parts,
+					StyleHelpKey.Render(h.Key)+" "+StyleHelpDesc.Render(h.Desc))
+			}
+			content = strings.Join(parts, "  │  ")
+		}
+	}
+
+	return StyleStatusBar.Width(a.width).Render(content)
+}
+
+func (a *App) getHelpItems() []KeyBinding {
+	global := []KeyBinding{
+		{Key: "tab", Desc: "next view"},
+		{Key: "1-6", Desc: "jump tab"},
+		{Key: ":", Desc: "command"},
+		{Key: "/", Desc: "find view"},
+		{Key: "?", Desc: "help"},
+		{Key: "q", Desc: "quit"},
+	}
+	if a.activeTab < len(a.views) {
+		return append(a.views[a.activeTab].ShortHelp(), global...)
+	}
+	return global
+}
+
+func (a *App) renderHelp() string {
+	help := []string{
+		StyleTitle.Render("⌨ paiSQL Keyboard Shortcuts"),
+		"",
+		StyleHelpKey.Render("Tab / Shift+Tab") + "  Switch between views",
+		StyleHelpKey.Render("1-6") + "              Jump to view by number",
+		StyleHelpKey.Render(":") + "                Command mode (e.g. :dt, :quit)",
+		StyleHelpKey.Render("/") + "                Jump to view by name",
+		StyleHelpKey.Render("?") + "                Toggle this help",
+		StyleHelpKey.Render("q / Ctrl+C") + "       Quit",
+		"",
+		StyleTitle.Render("View-specific"),
+		"",
+		StyleHelpKey.Render("↑/↓ j/k") + "         Vertical scroll",
+		StyleHelpKey.Render("←/→ h/l") + "         Horizontal scroll",
+		StyleHelpKey.Render("PgUp/PgDn") + "        Page up/down",
+		StyleHelpKey.Render("Enter") + "            Execute query (SQL view)",
+		StyleHelpKey.Render("Ctrl+E") + "           Explain query",
+		"",
+		StyleDimmed.Render("Press ? to close"),
+	}
+
+	contentHeight := a.height - 3
+	box := lipgloss.NewStyle().
+		Width(a.width-4).
+		Height(contentHeight).
+		Padding(1, 2).
+		Render(strings.Join(help, "\n"))
+
+	return box
+}
