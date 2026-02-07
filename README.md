@@ -12,6 +12,31 @@ PostgreSQL CLI with TUI and AI assistant — featuring multi-view navigation, ta
 - **Async queries** — database and AI operations never block the UI
 - **Keyboard-driven** — tab switching, command mode, jump mode, help overlay
 
+## Installation
+
+### Using `go install`
+
+```bash
+go install github.com/DachengChen/paiSQL@latest
+```
+
+### Download from GitHub Releases
+
+Download the latest binary for your platform from the [Releases page](https://github.com/DachengChen/paiSQL/releases):
+
+| Platform | File |
+|---|---|
+| macOS (Apple Silicon) | `paisql_darwin_arm64.tar.gz` |
+| macOS (Intel) | `paisql_darwin_amd64.tar.gz` |
+| Linux (x86_64) | `paisql_linux_amd64.tar.gz` |
+| Windows (x86_64) | `paisql_windows_amd64.zip` |
+
+```bash
+# Example: macOS Apple Silicon
+curl -sSL https://github.com/DachengChen/paiSQL/releases/latest/download/paisql_darwin_arm64.tar.gz | tar xz
+sudo mv paisql /usr/local/bin/
+```
+
 ## Quick Start
 
 ```bash
@@ -87,6 +112,23 @@ air
     ├── view_log.go     # Activity tail log view
     └── view_ai.go      # AI assistant chat view
 ```
+
+## Linting
+
+Run lint checks locally before pushing to catch CI failures early:
+
+```bash
+# Run lint (mirrors CI: golangci-lint v1.64 + Go 1.24)
+scripts/lint-local.sh
+
+# Auto-fix lint issues
+scripts/lint-local.sh --fix
+
+# Verbose output
+scripts/lint-local.sh --verbose
+```
+
+The script automatically downloads the exact `golangci-lint` version used in CI and uses `goenv` to ensure the correct Go version.
 
 ## Saved Connections
 

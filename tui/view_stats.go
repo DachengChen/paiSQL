@@ -129,11 +129,10 @@ func (v *StatsView) fetchStats() tea.Cmd {
 
 		// Cache hit ratio
 		var hitRatio *float64
-		v.db.Pool.QueryRow(ctx, `
+		if err := v.db.Pool.QueryRow(ctx, `
 			SELECT ROUND(
 				sum(heap_blks_hit) / NULLIF(sum(heap_blks_hit) + sum(heap_blks_read), 0) * 100, 2
-			) FROM pg_statio_user_tables`).Scan(&hitRatio)
-		if hitRatio != nil {
+			) FROM pg_statio_user_tables`).Scan(&hitRatio); err == nil && hitRatio != nil {
 			lines = append(lines, fmt.Sprintf("  Cache hit ratio:      %.2f%%", *hitRatio))
 		} else {
 			lines = append(lines, "  Cache hit ratio:      N/A")
