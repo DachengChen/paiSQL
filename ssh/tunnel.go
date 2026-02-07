@@ -132,11 +132,11 @@ func (t *Tunnel) forward(localConn net.Conn) {
 	// Bidirectional copy
 	done := make(chan struct{}, 2)
 	go func() {
-		io.Copy(remoteConn, localConn)
+		_, _ = io.Copy(remoteConn, localConn)
 		done <- struct{}{}
 	}()
 	go func() {
-		io.Copy(localConn, remoteConn)
+		_, _ = io.Copy(localConn, remoteConn)
 		done <- struct{}{}
 	}()
 	<-done
