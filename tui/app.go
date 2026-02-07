@@ -179,7 +179,7 @@ func (a *App) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 // initViews creates all main views after connection is established.
 func (a *App) initViews() {
 	a.views = []View{
-		NewSQLView(a.db, a.aiProvider),
+		NewMainView(a.db, a.aiProvider),
 		NewExplainView(a.db),
 		NewIndexView(a.db, a.aiProvider),
 		NewStatsView(a.db),

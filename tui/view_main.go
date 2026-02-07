@@ -1,4 +1,4 @@
-// view_sql.go — The main SQL query view.
+// view_main.go — The main view.
 //
 // Features:
 //   - Text input for SQL queries
@@ -32,7 +32,7 @@ const (
 	inputModeSQL
 )
 
-type SQLView struct {
+type MainView struct {
 	db       *db.DB
 	vars     *db.Variables
 	viewport *Viewport
@@ -66,8 +66,8 @@ type SQLView struct {
 	chatLoading  bool
 }
 
-func NewSQLView(database *db.DB, provider ai.Provider) *SQLView {
-	return &SQLView{
+func NewMainView(database *db.DB, provider ai.Provider) *MainView {
+	return &MainView{
 		db:         database,
 		vars:       db.NewVariables(),
 		viewport:   NewViewport(80, 20),
@@ -77,14 +77,14 @@ func NewSQLView(database *db.DB, provider ai.Provider) *SQLView {
 	}
 }
 
-func (v *SQLView) Name() string { return "SQL" }
+func (v *MainView) Name() string { return "Main" }
 
-func (v *SQLView) SetSize(width, height int) {
+func (v *MainView) SetSize(width, height int) {
 	v.width = width
 	v.height = height
 }
 
-func (v *SQLView) ShortHelp() []KeyBinding {
+func (v *MainView) ShortHelp() []KeyBinding {
 	modeLabel := "chat"
 	if v.inputMode == inputModeChat {
 		modeLabel = "sql"
@@ -122,18 +122,18 @@ func (v *SQLView) ShortHelp() []KeyBinding {
 	}
 }
 
-func (v *SQLView) Init() tea.Cmd {
+func (v *MainView) Init() tea.Cmd {
 	return v.fetchTables()
 }
 
-func (v *SQLView) fetchTables() tea.Cmd {
+func (v *MainView) fetchTables() tea.Cmd {
 	return func() tea.Msg {
 		tables, err := v.db.ListTables(context.Background(), "public")
 		return TablesListMsg{Tables: tables, Err: err}
 	}
 }
 
-func (v *SQLView) Update(msg tea.Msg) (View, tea.Cmd) {
+func (v *MainView) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return v.handleKey(msg)
@@ -193,7 +193,7 @@ func (v *SQLView) Update(msg tea.Msg) (View, tea.Cmd) {
 	return v, nil
 }
 
-func (v *SQLView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
+func (v *MainView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	// F2 toggles between SQL and Chat input mode
 	if msg.String() == "f2" {
 		if v.inputMode == inputModeSQL {
@@ -232,7 +232,7 @@ func (v *SQLView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	return v, nil
 }
 
-func (v *SQLView) handleSidebarKey(msg tea.KeyMsg) (View, tea.Cmd) {
+func (v *MainView) handleSidebarKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
 		if v.tableIdx > 0 {
@@ -284,7 +284,7 @@ func (v *SQLView) handleSidebarKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	return v, nil
 }
 
-func (v *SQLView) handleResultsKey(msg tea.KeyMsg) (View, tea.Cmd) {
+func (v *MainView) handleResultsKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
 		v.viewport.ScrollUp(1)
@@ -329,7 +329,7 @@ func (v *SQLView) handleResultsKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	return v, nil
 }
 
-func (v *SQLView) handleInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
+func (v *MainView) handleInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		return v, v.execute()
@@ -360,7 +360,7 @@ func (v *SQLView) handleInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	return v, nil
 }
 
-func (v *SQLView) execute() tea.Cmd {
+func (v *MainView) execute() tea.Cmd {
 	input := strings.TrimSpace(v.input)
 	if input == "" {
 		return nil
@@ -381,7 +381,7 @@ func (v *SQLView) execute() tea.Cmd {
 }
 
 // fetchPage runs a paginated SELECT for the current table.
-func (v *SQLView) fetchPage() tea.Cmd {
+func (v *MainView) fetchPage() tea.Cmd {
 	table := v.pagTable
 	page := v.pagPage
 	pageSize := v.pagPageSize
@@ -419,7 +419,7 @@ func (v *SQLView) fetchPage() tea.Cmd {
 	}
 }
 
-func (v *SQLView) maxPage() int {
+func (v *MainView) maxPage() int {
 	if v.pagTotal <= 0 || v.pagPageSize <= 0 {
 		return 0
 	}
@@ -433,7 +433,7 @@ func maxPageCalc(total int64, pageSize int64) int64 {
 	return (total - 1) / pageSize
 }
 
-func (v *SQLView) handleMetaCommand(cmd string) tea.Cmd {
+func (v *MainView) handleMetaCommand(cmd string) tea.Cmd {
 	// Simple meta commands
 	parts := strings.Fields(cmd)
 	switch parts[0] {
@@ -458,7 +458,7 @@ func (v *SQLView) handleMetaCommand(cmd string) tea.Cmd {
 // Chat input mode handlers
 // ══════════════════════════════════════════
 
-func (v *SQLView) handleChatInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
+func (v *MainView) handleChatInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		return v, v.sendChatMessage()
@@ -479,7 +479,7 @@ func (v *SQLView) handleChatInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	return v, nil
 }
 
-func (v *SQLView) sendChatMessage() tea.Cmd {
+func (v *MainView) sendChatMessage() tea.Cmd {
 	text := strings.TrimSpace(v.chatInput)
 	if text == "" {
 		return nil
@@ -503,7 +503,7 @@ func (v *SQLView) sendChatMessage() tea.Cmd {
 	}
 }
 
-func (v *SQLView) renderChatHistory() []string {
+func (v *MainView) renderChatHistory() []string {
 	var lines []string
 
 	lines = append(lines, StyleTitle.Render("🤖 AI Chat")+" "+
@@ -543,7 +543,7 @@ func (v *SQLView) renderChatHistory() []string {
 	return lines
 }
 
-func (v *SQLView) formatResult(r *db.QueryResult) []string {
+func (v *MainView) formatResult(r *db.QueryResult) []string {
 	if r == nil || len(r.Columns) == 0 {
 		return []string{StyleDimmed.Render(r.Status)}
 	}
@@ -600,7 +600,7 @@ func (v *SQLView) formatResult(r *db.QueryResult) []string {
 	return lines
 }
 
-func (v *SQLView) View() string {
+func (v *MainView) View() string {
 	// Dimensions
 	sidebarWidth := v.width / 5 // 20% of full width
 	if sidebarWidth < 20 {
