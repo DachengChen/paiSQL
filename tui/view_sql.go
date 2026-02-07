@@ -614,7 +614,11 @@ func (v *SQLView) View() string {
 	// 1. Sidebar (same for both modes)
 	var tableList []string
 	headerStyle := StyleBold.BorderBottom(true).BorderForeground(ColorDim).Width(sidebarWidth - 2)
-	tableList = append(tableList, headerStyle.Render(" Tables"))
+	sidebarTitle := "   Tables"
+	if v.focus == focusSidebar {
+		sidebarTitle = lipgloss.NewStyle().Foreground(ColorAccent).Render(" ●") + " Tables"
+	}
+	tableList = append(tableList, headerStyle.Render(sidebarTitle))
 
 	if v.tableErr != nil {
 		tableList = append(tableList, StyleError.Render("Error: "+v.tableErr.Error()))
@@ -678,8 +682,10 @@ func (v *SQLView) View() string {
 	// 2. Results Block (Top Right) — single viewport for both SQL and Chat
 	v.viewport.SetSize(contentWidth-2, resultsHeight-2)
 	resultsBorderColor := ColorDim
+	resultsFocus := "  "
 	if v.focus == focusResults {
 		resultsBorderColor = ColorAccent
+		resultsFocus = lipgloss.NewStyle().Foreground(ColorAccent).Render(" ●")
 	}
 
 	resultBlock := lipgloss.NewStyle().
@@ -687,12 +693,12 @@ func (v *SQLView) View() string {
 		Height(resultsHeight).
 		Border(lipgloss.NormalBorder(), false, false, true, false).
 		BorderForeground(resultsBorderColor).
-		Render(v.viewport.Render())
+		Render(resultsFocus + v.viewport.Render())
 
 	// 3. Input Block (Bottom Right)
-	inputBorderColor := ColorDim
+	inputFocus := "  "
 	if v.focus == focusInput {
-		inputBorderColor = ColorAccent
+		inputFocus = lipgloss.NewStyle().Foreground(ColorAccent).Render("● ")
 	}
 
 	var promptLabel, promptTxt string
@@ -728,8 +734,7 @@ func (v *SQLView) View() string {
 		Width(contentWidth).
 		Height(inputHeight).
 		Padding(0, 1).
-		BorderForeground(inputBorderColor).
-		Render(promptLabel + promptTxt)
+		Render(inputFocus + promptLabel + promptTxt)
 
 	// Combine Right Side
 	rightPane := lipgloss.JoinVertical(lipgloss.Left, resultBlock, inputBlock)
