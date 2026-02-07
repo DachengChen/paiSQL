@@ -16,13 +16,13 @@ PostgreSQL CLI with TUI and AI assistant — featuring multi-view navigation, ta
 
 ```bash
 # Build
-go build -o .generated/paiSQL .
+go build -o bin/paiSQL .
 
 # Connect to local PostgreSQL
-./.generated/paiSQL -H localhost -p 5432 -U docker -d ports -W docker
+./bin/paiSQL -H localhost -p 5432 -U docker -d ports -W docker
 
 # Connect via SSH tunnel
-./.generated/paiSQL \
+./bin/paiSQL \
   --ssh --ssh-host bastion.example.com --ssh-user deploy \
   --ssh-key ~/.ssh/id_rsa \
   -H db-internal -p 5432 -U myuser -d mydb

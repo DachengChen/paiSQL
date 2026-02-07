@@ -1,0 +1,20 @@
+root = "."
+tmp_dir = "bin/tmp"
+
+[build]
+  # Build command
+  cmd = "go build -o bin/paiSQL ."
+  # Binary to run
+  bin = "bin/paiSQL -H localhost -p 5432 -U docker -d ports -W docker --sslmode disable"
+  # Watch these extensions
+  include_ext = ["go"]
+  # Exclude directories
+  exclude_dir = [".git", ".generated", ".agent", "vendor", "bin"]
+  # Delay before rebuilding (ms)
+  delay = 1000
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true
