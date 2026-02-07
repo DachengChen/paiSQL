@@ -619,7 +619,7 @@ func (v *SQLView) View() string {
 	if v.tableErr != nil {
 		tableList = append(tableList, StyleError.Render("Error: "+v.tableErr.Error()))
 	} else if len(v.tables) > 0 {
-		limit := v.height - 4
+		limit := v.height
 		start := 0
 		if v.tableIdx > limit/2 {
 			start = v.tableIdx - limit/2
@@ -657,6 +657,11 @@ func (v *SQLView) View() string {
 		}
 	} else {
 		tableList = append(tableList, StyleDimmed.Render(" (no tables)"))
+	}
+
+	// Pad table list to fill sidebar height so the border extends to the bottom
+	for len(tableList) < v.height+1 {
+		tableList = append(tableList, "")
 	}
 
 	sidebarBorderColor := ColorDim
