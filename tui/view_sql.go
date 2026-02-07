@@ -162,13 +162,37 @@ func (v *SQLView) handleSidebarKey(msg tea.KeyMsg) (View, tea.Cmd) {
 		if v.tableIdx < len(v.tables)-1 {
 			v.tableIdx++
 		}
+	case "pgup":
+		pageSize := v.height - 4
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		v.tableIdx -= pageSize
+		if v.tableIdx < 0 {
+			v.tableIdx = 0
+		}
+	case "pgdown":
+		pageSize := v.height - 4
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		v.tableIdx += pageSize
+		if v.tableIdx >= len(v.tables) {
+			v.tableIdx = len(v.tables) - 1
+		}
+	case "home":
+		v.tableIdx = 0
+	case "end":
+		if len(v.tables) > 0 {
+			v.tableIdx = len(v.tables) - 1
+		}
 	case "enter":
 		if len(v.tables) > 0 {
 			selected := v.tables[v.tableIdx]
 			v.input = fmt.Sprintf("SELECT * FROM %s LIMIT 20;", selected)
 			// Execute immediately
 			cmd := v.execute()
-			v.focus = focusResults // Focus results to browse
+			// v.focus = focusResults // Keep focus in sidebar
 			return v, cmd
 		}
 	}
