@@ -443,30 +443,6 @@ func (a *App) renderConnectHelpBar() string {
 		Render(content)
 }
 
-func (a *App) renderTabBar() string {
-	var tabs []string
-	for i, v := range a.views {
-		label := v.Name()
-		if i == a.activeTab {
-			tabs = append(tabs, StyleTabActive.Render(label))
-		} else {
-			tabs = append(tabs, StyleTabInactive.Render(label))
-		}
-	}
-
-	// Connection indicator
-	connLabel := " ⚡ " + a.connName
-	if a.connName == "" {
-		connLabel = " ⚡ connected"
-	}
-	connIndicator := lipgloss.NewStyle().Foreground(ColorSuccess).Render(connLabel)
-
-	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
-	tabBar += "  " + connIndicator
-
-	return lipgloss.NewStyle().Width(a.width).Background(ColorBgAlt).Render(tabBar)
-}
-
 func (a *App) renderStatusBar() string {
 	var content string
 

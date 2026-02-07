@@ -101,18 +101,24 @@ func (v *StatsView) fetchStats() tea.Cmd {
 
 		// Current database
 		var dbName string
-		v.db.Pool.QueryRow(ctx, "SELECT current_database()").Scan(&dbName)
+		if err := v.db.Pool.QueryRow(ctx, "SELECT current_database()").Scan(&dbName); err != nil {
+			return StatsMsg{Err: err}
+		}
 		lines = append(lines, fmt.Sprintf("  Database:             %s", dbName))
 
 		// Active connections
 		var connCount int
-		v.db.Pool.QueryRow(ctx,
-			"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()").Scan(&connCount)
+		if err := v.db.Pool.QueryRow(ctx,
+			"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()").Scan(&connCount); err != nil {
+			return StatsMsg{Err: err}
+		}
 		lines = append(lines, fmt.Sprintf("  Active connections:   %d", connCount))
 
 		// PostgreSQL version
 		var version string
-		v.db.Pool.QueryRow(ctx, "SELECT version()").Scan(&version)
+		if err := v.db.Pool.QueryRow(ctx, "SELECT version()").Scan(&version); err != nil {
+			return StatsMsg{Err: err}
+		}
 		// Truncate long version strings
 		if idx := strings.Index(version, ","); idx > 0 {
 			version = version[:idx]
@@ -155,7 +161,9 @@ func (v *StatsView) fetchStats() tea.Cmd {
 		for rows.Next() {
 			var name, size string
 			var rowCount int64
-			rows.Scan(&name, &size, &rowCount)
+			if err := rows.Scan(&name, &size, &rowCount); err != nil {
+				return StatsMsg{Err: err}
+			}
 			lines = append(lines, fmt.Sprintf("  %-40s │ %-12s │ %d", name, size, rowCount))
 		}
 
