@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/DachengChen/paiSQL/ai"
 	"github.com/DachengChen/paiSQL/db"
@@ -451,14 +452,17 @@ func (v *SQLView) formatResult(r *db.QueryResult) []string {
 	if r == nil || len(r.Columns) == 0 {
 		return []string{StyleDimmed.Render(r.Status)}
 	}
+
+	runeLen := utf8.RuneCountInString
+
 	widths := make([]int, len(r.Columns))
 	for i, col := range r.Columns {
-		widths[i] = len(col)
+		widths[i] = runeLen(col)
 	}
 	for _, row := range r.Rows {
 		for i, cell := range row {
-			if i < len(widths) && len(cell) > widths[i] {
-				widths[i] = len(cell)
+			if i < len(widths) && runeLen(cell) > widths[i] {
+				widths[i] = runeLen(cell)
 			}
 		}
 	}
@@ -469,26 +473,35 @@ func (v *SQLView) formatResult(r *db.QueryResult) []string {
 	}
 	var lines []string
 	header := ""
-	separator := ""
 	for i, col := range r.Columns {
 		header += fmt.Sprintf(" %-*s │", widths[i], col)
-		separator += strings.Repeat("─", widths[i]+1) + "┼"
 	}
-	lines = append(lines, StyleSuccess.Render(strings.TrimRight(header, "│")))
-	lines = append(lines, StyleDimmed.Render(strings.TrimRight(separator, "┼")))
+	// Build separator from header: replace every char with ─, except │ → ┼
+	var sepBuilder strings.Builder
+	for _, ch := range header {
+		if ch == '│' {
+			sepBuilder.WriteRune('┼')
+		} else {
+			sepBuilder.WriteRune('─')
+		}
+	}
+	separator := sepBuilder.String()
+	lines = append(lines, strings.TrimRight(header, "│"))
+	lines = append(lines, strings.TrimRight(separator, "┼"))
 	for _, row := range r.Rows {
 		line := ""
 		for i, cell := range row {
 			if i < len(widths) {
-				if len(cell) > widths[i] {
-					cell = cell[:widths[i]-1] + "…"
+				if runeLen(cell) > widths[i] {
+					runes := []rune(cell)
+					cell = string(runes[:widths[i]-1]) + "…"
 				}
 				line += fmt.Sprintf(" %-*s │", widths[i], cell)
 			}
 		}
 		lines = append(lines, strings.TrimRight(line, "│"))
 	}
-	lines = append(lines, "", StyleDimmed.Render(r.Status))
+	lines = append(lines, "", r.Status)
 	return lines
 }
 

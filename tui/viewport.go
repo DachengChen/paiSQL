@@ -6,6 +6,7 @@ package tui
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -140,17 +141,18 @@ func (v *Viewport) renderScrolled() []string {
 	var lines []string
 	for i := v.scrollY; i < end; i++ {
 		line := v.content[i]
+		runes := []rune(line)
 		// Apply horizontal scroll
-		if v.scrollX > 0 && v.scrollX < len(line) {
-			line = line[v.scrollX:]
-		} else if v.scrollX >= len(line) {
-			line = ""
+		if v.scrollX > 0 && v.scrollX < len(runes) {
+			runes = runes[v.scrollX:]
+		} else if v.scrollX >= len(runes) {
+			runes = nil
 		}
 		// Truncate to width
-		if len(line) > v.width {
-			line = line[:v.width]
+		if len(runes) > v.width {
+			runes = runes[:v.width]
 		}
-		lines = append(lines, line)
+		lines = append(lines, string(runes))
 	}
 	return lines
 }
@@ -160,14 +162,16 @@ func (v *Viewport) renderWrapped() []string {
 	// First, wrap all content lines
 	var wrapped []string
 	for _, line := range v.content {
-		if len(line) <= v.width || v.width <= 0 {
+		rl := utf8.RuneCountInString(line)
+		if rl <= v.width || v.width <= 0 {
 			wrapped = append(wrapped, line)
 		} else {
-			for len(line) > v.width {
-				wrapped = append(wrapped, line[:v.width])
-				line = line[v.width:]
+			runes := []rune(line)
+			for len(runes) > v.width {
+				wrapped = append(wrapped, string(runes[:v.width]))
+				runes = runes[v.width:]
 			}
-			wrapped = append(wrapped, line)
+			wrapped = append(wrapped, string(runes))
 		}
 	}
 
@@ -197,10 +201,11 @@ func (v *Viewport) maxScrollY() int {
 	if v.wrapText && v.width > 0 {
 		total = 0
 		for _, line := range v.content {
-			if len(line) <= v.width {
+			rl := utf8.RuneCountInString(line)
+			if rl <= v.width {
 				total++
 			} else {
-				total += (len(line) + v.width - 1) / v.width
+				total += (rl + v.width - 1) / v.width
 			}
 		}
 	}
