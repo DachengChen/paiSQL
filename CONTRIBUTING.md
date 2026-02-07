@@ -1,8 +1,8 @@
 # Contributing to paiSQL
 
-Thank you for your interest in contributing to paiSQL!This document outlines the process for contributing to the project.
+Thank you for your interest in contributing to paiSQL! This document outlines the process for contributing to the project.
 
-## Branhing Strategy
+## Branching Strategy
 
 We use the following branching model:
 
@@ -23,11 +23,17 @@ We use the following branching model:
 ## Local Development
 
 ### Prerequisites
-- Go 1.22 or higher
+- Go 1.24 or higher (we use [goenv](https://github.com/go-nv/goenv) for version management)
 
 ### Running the App
 ```bash
 go run .
+```
+
+### Linting
+Run lint checks locally before submitting a PR (mirrors CI exactly):
+```bash
+scripts/lint-local.sh
 ```
 
 ### Running Tests

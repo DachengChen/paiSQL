@@ -1,5 +1,10 @@
 # paiSQL
 
+[![CI](https://github.com/DachengChen/paiSQL/actions/workflows/ci.yml/badge.svg)](https://github.com/DachengChen/paiSQL/actions/workflows/ci.yml)
+[![Release](https://github.com/DachengChen/paiSQL/actions/workflows/release.yml/badge.svg)](https://github.com/DachengChen/paiSQL/actions/workflows/release.yml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/DachengChen/paiSQL)](https://go.dev/)
+[![License](https://img.shields.io/github/license/DachengChen/paiSQL)](LICENSE)
+
 PostgreSQL CLI with TUI and AI assistant — featuring multi-view navigation, tail logs, explain plans, index suggestions, and keyboard-driven interface.
 
 ## Features
@@ -7,6 +12,7 @@ PostgreSQL CLI with TUI and AI assistant — featuring multi-view navigation, ta
 - **pgx-based** — connects directly to PostgreSQL via pgx (no `psql` dependency)
 - **TUI connection manager** — configure, save, and select database connections in the TUI
 - **SSH tunnel** — optional local port forwarding for remote databases
+- **Multi-LLM AI assistant** — OpenAI, Anthropic, Google Gemini, and Ollama (local) support
 - **6 TUI views** — SQL, Explain, Index, Stats, Log, AI
 - **psql-like commands** — `\dt`, `\di`, `\dv`, `\d <table>`, `\set`
 - **Async queries** — database and AI operations never block the UI
@@ -130,6 +136,44 @@ scripts/lint-local.sh --verbose
 
 The script automatically downloads the exact `golangci-lint` version used in CI and uses `goenv` to ensure the correct Go version.
 
+## AI Providers
+
+paiSQL supports multiple AI backends for the built-in AI assistant. Configure via `~/.paisql/config.json` or environment variables.
+
+### Quick Setup
+
+```bash
+# Option 1: Environment variable (recommended)
+export OPENAI_API_KEY="sk-..."
+
+# Option 2: Config file (~/.paisql/config.json)
+```
+
+```json
+{
+  "ai": {
+    "provider": "openai",
+    "openai":    { "api_key": "sk-...",     "model": "gpt-4o" },
+    "anthropic": { "api_key": "sk-ant-...", "model": "claude-sonnet-4-20250514" },
+    "gemini":    { "api_key": "AI...",      "model": "gemini-2.0-flash" },
+    "ollama":    { "host": "http://localhost:11434", "model": "llama3.2" }
+  }
+}
+```
+
+### Supported Providers
+
+| Provider | Env Variable | Models | Notes |
+|---|---|---|---|
+| **OpenAI** | `OPENAI_API_KEY` | gpt-4o, gpt-4o-mini, etc. | Default cloud option |
+| **Anthropic** | `ANTHROPIC_API_KEY` | claude-sonnet-4-20250514, etc. | |
+| **Gemini** | `GEMINI_API_KEY` | gemini-2.0-flash, gemini-2.5-pro, etc. | Google AI |
+| **Ollama** | `OLLAMA_HOST` | llama3.2, codellama, etc. | Free, runs locally |
+
 ## Saved Connections
 
 Connections are saved to `~/.paisql/connections.json`. You can save, load, and delete connections directly from the TUI connection screen.
+
+---
+
+*Built with assistance from [Antigravity](https://deepmind.google/) 🚀*
