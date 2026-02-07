@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/DachengChen/paiSQL/ai"
 	"github.com/DachengChen/paiSQL/db"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -22,6 +23,12 @@ const (
 	focusSidebar = iota
 	focusResults
 	focusInput
+)
+
+// inputMode determines whether the input block is SQL or Chat.
+const (
+	inputModeChat = iota
+	inputModeSQL
 )
 
 type SQLView struct {
@@ -42,15 +49,23 @@ type SQLView struct {
 	tableIdx int
 	focus    int
 	tableErr error
+
+	// Chat mode state
+	inputMode    int // inputModeChat or inputModeSQL
+	aiProvider   ai.Provider
+	chatInput    string
+	chatMessages []ai.Message
+	chatLoading  bool
 }
 
-func NewSQLView(database *db.DB) *SQLView {
+func NewSQLView(database *db.DB, provider ai.Provider) *SQLView {
 	return &SQLView{
-		db:       database,
-		vars:     db.NewVariables(),
-		viewport: NewViewport(80, 20),
-		histIdx:  -1,
-		focus:    focusSidebar, // Start in sidebar
+		db:         database,
+		vars:       db.NewVariables(),
+		viewport:   NewViewport(80, 20),
+		histIdx:    -1,
+		focus:      focusSidebar,
+		aiProvider: provider,
 	}
 }
 
@@ -62,19 +77,36 @@ func (v *SQLView) SetSize(width, height int) {
 }
 
 func (v *SQLView) ShortHelp() []KeyBinding {
+	modeLabel := "chat"
+	if v.inputMode == inputModeChat {
+		modeLabel = "sql"
+	}
+	toggle := KeyBinding{Key: "F2", Desc: modeLabel}
+
 	if v.focus == focusSidebar {
 		return []KeyBinding{
+			toggle,
 			{Key: "↑/↓", Desc: "navigate"},
 			{Key: "Enter", Desc: "select table"},
 			{Key: "Tab", Desc: "focus results"},
 		}
 	} else if v.focus == focusResults {
 		return []KeyBinding{
+			toggle,
 			{Key: "↑/↓/PgUp/PgDn", Desc: "scroll"},
 			{Key: "Tab", Desc: "focus input"},
 		}
 	}
+
+	if v.inputMode == inputModeChat {
+		return []KeyBinding{
+			toggle,
+			{Key: "Enter", Desc: "send"},
+			{Key: "Ctrl+L", Desc: "clear chat"},
+		}
+	}
 	return []KeyBinding{
+		toggle,
 		{Key: "Enter", Desc: "execute"},
 		{Key: "Tab", Desc: "focus tables"},
 		{Key: "↑/↓", Desc: "history"},
@@ -106,7 +138,6 @@ func (v *SQLView) Update(msg tea.Msg) (View, tea.Cmd) {
 		} else if msg.Err != nil {
 			v.viewport.SetContent(StyleError.Render("ERROR: " + msg.Err.Error()))
 		}
-		// Auto-focus results on success? Optional. Keeping current focus.
 		return v, nil
 
 	case TablesListMsg:
@@ -121,18 +152,45 @@ func (v *SQLView) Update(msg tea.Msg) (View, tea.Cmd) {
 			v.tableErr = msg.Err
 		}
 		return v, nil
+
+	case AIResponseMsg:
+		v.chatLoading = false
+		if msg.Err != nil {
+			v.chatMessages = append(v.chatMessages, ai.Message{
+				Role:    "assistant",
+				Content: "Error: " + msg.Err.Error(),
+			})
+		} else {
+			v.chatMessages = append(v.chatMessages, ai.Message{
+				Role:    "assistant",
+				Content: msg.Response,
+			})
+		}
+		v.viewport.SetContentLines(v.renderChatHistory())
+		v.viewport.End()
+		return v, nil
 	}
 
 	return v, nil
 }
 
 func (v *SQLView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
+	// F2 toggles between SQL and Chat input mode
+	if msg.String() == "f2" {
+		if v.inputMode == inputModeSQL {
+			v.inputMode = inputModeChat
+		} else {
+			v.inputMode = inputModeSQL
+		}
+		v.focus = focusInput
+		return v, nil
+	}
+
 	// Navigate between panes
 	if msg.String() == "tab" {
 		v.focus = (v.focus + 1) % 3
 		return v, nil
 	}
-	// Shift+Tab to go back? Bubble Tea might capture as "shift+tab"
 	if msg.String() == "shift+tab" {
 		v.focus--
 		if v.focus < 0 {
@@ -147,6 +205,9 @@ func (v *SQLView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	case focusResults:
 		return v.handleResultsKey(msg)
 	case focusInput:
+		if v.inputMode == inputModeChat {
+			return v.handleChatInputKey(msg)
+		}
 		return v.handleInputKey(msg)
 	}
 	return v, nil
@@ -190,7 +251,6 @@ func (v *SQLView) handleSidebarKey(msg tea.KeyMsg) (View, tea.Cmd) {
 		if len(v.tables) > 0 {
 			selected := v.tables[v.tableIdx]
 			v.input = fmt.Sprintf("SELECT * FROM %s LIMIT 20;", selected)
-			// Execute immediately
 			cmd := v.execute()
 			// v.focus = focusResults // Keep focus in sidebar
 			return v, cmd
@@ -294,6 +354,95 @@ func (v *SQLView) handleMetaCommand(cmd string) tea.Cmd {
 	return nil
 }
 
+// ══════════════════════════════════════════
+// Chat input mode handlers
+// ══════════════════════════════════════════
+
+func (v *SQLView) handleChatInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		return v, v.sendChatMessage()
+	case "ctrl+l":
+		v.chatMessages = nil
+		v.chatInput = ""
+		v.viewport.SetContentLines(v.renderChatHistory())
+		return v, nil
+	case "backspace":
+		if len(v.chatInput) > 0 {
+			v.chatInput = v.chatInput[:len(v.chatInput)-1]
+		}
+	default:
+		if len(msg.String()) == 1 || msg.String() == " " {
+			v.chatInput += msg.String()
+		}
+	}
+	return v, nil
+}
+
+func (v *SQLView) sendChatMessage() tea.Cmd {
+	text := strings.TrimSpace(v.chatInput)
+	if text == "" {
+		return nil
+	}
+
+	v.chatMessages = append(v.chatMessages, ai.Message{
+		Role:    "user",
+		Content: text,
+	})
+	v.chatInput = ""
+	v.chatLoading = true
+	v.viewport.SetContentLines(v.renderChatHistory())
+	v.viewport.End()
+
+	msgs := make([]ai.Message, len(v.chatMessages))
+	copy(msgs, v.chatMessages)
+
+	return func() tea.Msg {
+		resp, err := v.aiProvider.Chat(context.Background(), msgs)
+		return AIResponseMsg{Response: resp, Err: err}
+	}
+}
+
+func (v *SQLView) renderChatHistory() []string {
+	var lines []string
+
+	lines = append(lines, StyleTitle.Render("🤖 AI Chat")+" "+
+		StyleDimmed.Render("("+v.aiProvider.Name()+")"))
+	lines = append(lines, "")
+
+	if len(v.chatMessages) == 0 {
+		lines = append(lines, StyleDimmed.Render("Ask anything about your database..."))
+		lines = append(lines, StyleDimmed.Render("Press F2 to switch back to SQL."))
+		return lines
+	}
+
+	userStyle := lipgloss.NewStyle().
+		Foreground(ColorSecondary).
+		Bold(true)
+	assistantStyle := lipgloss.NewStyle().
+		Foreground(ColorSuccess)
+
+	for _, msg := range v.chatMessages {
+		switch msg.Role {
+		case "user":
+			lines = append(lines, userStyle.Render("You: ")+msg.Content)
+			lines = append(lines, "")
+		case "assistant":
+			lines = append(lines, assistantStyle.Render("AI: "))
+			for _, line := range strings.Split(msg.Content, "\n") {
+				lines = append(lines, "  "+line)
+			}
+			lines = append(lines, "")
+		}
+	}
+
+	if v.chatLoading {
+		lines = append(lines, StyleDimmed.Render("  ⏳ Thinking..."))
+	}
+
+	return lines
+}
+
 func (v *SQLView) formatResult(r *db.QueryResult) []string {
 	if r == nil || len(r.Columns) == 0 {
 		return []string{StyleDimmed.Render(r.Status)}
@@ -342,17 +491,12 @@ func (v *SQLView) formatResult(r *db.QueryResult) []string {
 func (v *SQLView) View() string {
 	// Dimensions
 	sidebarWidth := 25
-	inputHeight := 5 // fixed height for input block
+	inputHeight := 5
 
-	// Calculate available width for the right pane (results + input)
-	// v.width - sidebarWidth - 2 (for sidebar's right border + 1 padding)
 	contentWidth := v.width - sidebarWidth - 1
-
-	// Calculate height for results block
-	// v.height - inputHeight - 1 (for input block's top border)
 	resultsHeight := v.height - inputHeight - 1
 
-	// 1. Sidebar
+	// 1. Sidebar (same for both modes)
 	var tableList []string
 	headerStyle := StyleBold.BorderBottom(true).BorderForeground(ColorDim).Width(sidebarWidth - 2)
 	tableList = append(tableList, headerStyle.Render(" Tables"))
@@ -399,9 +543,7 @@ func (v *SQLView) View() string {
 		BorderForeground(sidebarBorderColor).
 		Render(strings.Join(tableList, "\n"))
 
-	// 2. Results Block (Top Right)
-	// Viewport content width is contentWidth - 2 for left/right padding/border
-	// Viewport content height is resultsHeight - 2 for top/bottom padding/border
+	// 2. Results Block (Top Right) — single viewport for both SQL and Chat
 	v.viewport.SetSize(contentWidth-2, resultsHeight-2)
 	resultsBorderColor := ColorDim
 	if v.focus == focusResults {
@@ -411,7 +553,7 @@ func (v *SQLView) View() string {
 	resultBlock := lipgloss.NewStyle().
 		Width(contentWidth).
 		Height(resultsHeight).
-		Border(lipgloss.NormalBorder(), false, false, true, false). // Bottom border
+		Border(lipgloss.NormalBorder(), false, false, true, false).
 		BorderForeground(resultsBorderColor).
 		Render(v.viewport.Render())
 
@@ -420,25 +562,42 @@ func (v *SQLView) View() string {
 	if v.focus == focusInput {
 		inputBorderColor = ColorAccent
 	}
-	promptTxt := v.input
-	if v.focus == focusInput {
-		promptTxt += "█"
-	} else if v.input == "" {
-		promptTxt = StyleDimmed.Render("(press tab to focus input)")
-	} else {
-		promptTxt = StyleDimmed.Render(promptTxt)
-	}
 
-	if v.loading {
-		promptTxt = StyleDimmed.Render("Executing...")
+	var promptLabel, promptTxt string
+	if v.inputMode == inputModeChat {
+		promptLabel = StylePrompt.Render("Ask> ")
+		promptTxt = v.chatInput
+		if v.focus == focusInput {
+			promptTxt += "█"
+		} else if v.chatInput == "" {
+			promptTxt = StyleDimmed.Render("(press tab to focus input)")
+		} else {
+			promptTxt = StyleDimmed.Render(promptTxt)
+		}
+		if v.chatLoading {
+			promptTxt = StyleDimmed.Render("waiting for response...")
+		}
+	} else {
+		promptLabel = StylePrompt.Render("SQL> ")
+		promptTxt = v.input
+		if v.focus == focusInput {
+			promptTxt += "█"
+		} else if v.input == "" {
+			promptTxt = StyleDimmed.Render("(press tab to focus input)")
+		} else {
+			promptTxt = StyleDimmed.Render(promptTxt)
+		}
+		if v.loading {
+			promptTxt = StyleDimmed.Render("Executing...")
+		}
 	}
 
 	inputBlock := lipgloss.NewStyle().
 		Width(contentWidth).
 		Height(inputHeight).
-		Padding(0, 1). // Padding inside the input block
+		Padding(0, 1).
 		BorderForeground(inputBorderColor).
-		Render(StylePrompt.Render("SQL> ") + promptTxt)
+		Render(promptLabel + promptTxt)
 
 	// Combine Right Side
 	rightPane := lipgloss.JoinVertical(lipgloss.Left, resultBlock, inputBlock)

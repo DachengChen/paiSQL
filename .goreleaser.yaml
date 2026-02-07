@@ -9,6 +9,10 @@ builds:
   - id: paisql
     env:
       - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X 'github.com/DachengChen/paiSQL/ai.antigravityClientID={{ .Env.ANTIGRAVITY_CLIENT_ID }}'
+      - -X 'github.com/DachengChen/paiSQL/ai.antigravityClientSecret={{ .Env.ANTIGRAVITY_CLIENT_SECRET }}'
     goos:
       - linux
       - darwin

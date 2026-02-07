@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DachengChen/paiSQL/ai"
 	"github.com/DachengChen/paiSQL/config"
 	"github.com/DachengChen/paiSQL/db"
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,7 +46,8 @@ const (
 	fieldAIProvider
 	fieldAIAPIKey
 	fieldAIModel
-	fieldAIHost // only for Ollama
+	fieldAIHost  // only for Ollama
+	fieldAILogin // only for Antigravity — "Login with Google" button
 	fieldAISave
 	fieldCount // sentinel
 )
@@ -82,6 +84,7 @@ var fieldLabels = map[int]string{
 	fieldAIAPIKey:   "API Key",
 	fieldAIModel:    "Model",
 	fieldAIHost:     "Host",
+	fieldAILogin:    "Login with Google",
 	fieldAISave:     "Save AI",
 }
 
@@ -89,7 +92,7 @@ var fieldLabels = map[int]string{
 var sslModes = []string{"disable", "require", "verify-ca", "verify-full", "prefer"}
 
 // AI provider options for cycling.
-var aiProviders = []string{"openai", "anthropic", "gemini", "ollama", "placeholder"}
+var aiProviders = []string{"openai", "anthropic", "gemini", "ollama", "antigravity", "placeholder"}
 
 // aiProviderDesc maps provider name to a short label.
 var aiProviderDesc = map[string]string{
@@ -97,15 +100,17 @@ var aiProviderDesc = map[string]string{
 	"anthropic":   "Anthropic (Claude)",
 	"gemini":      "Google Gemini",
 	"ollama":      "Ollama (local)",
+	"antigravity": "Google OAuth (free)",
 	"placeholder": "None (disabled)",
 }
 
 // aiDefaultModels maps provider name to its default model.
 var aiDefaultModels = map[string]string{
-	"openai":    "gpt-4o",
-	"anthropic": "claude-sonnet-4-20250514",
-	"gemini":    "gemini-2.0-flash",
-	"ollama":    "llama3.2",
+	"openai":      "gpt-4o",
+	"anthropic":   "claude-sonnet-4-20250514",
+	"gemini":      "gemini-2.0-flash",
+	"ollama":      "llama3.2",
+	"antigravity": "gemini-2.0-flash",
 }
 
 // ConnectView is the connection + AI setup form.
@@ -201,6 +206,10 @@ func (v *ConnectView) loadAIFieldsFromConfig() {
 		v.fields[fieldAIAPIKey] = ""
 		v.fields[fieldAIModel] = v.appCfg.AI.Ollama.Model
 		v.fields[fieldAIHost] = v.appCfg.AI.Ollama.Host
+	case "antigravity":
+		v.fields[fieldAIAPIKey] = ""
+		v.fields[fieldAIModel] = v.appCfg.AI.Antigravity.Model
+		v.fields[fieldAIHost] = ""
 	default:
 		v.fields[fieldAIAPIKey] = ""
 		v.fields[fieldAIModel] = ""
@@ -258,6 +267,16 @@ func (v *ConnectView) Update(msg tea.Msg) (View, tea.Cmd) {
 		v.connecting = false
 		v.err = msg.Err
 		v.statusMsg = ""
+		return v, nil
+
+	case AntigravityLoginMsg:
+		if msg.Err != nil {
+			v.err = msg.Err
+			v.statusMsg = ""
+		} else {
+			v.err = nil
+			v.statusMsg = "✅ Antigravity login successful!"
+		}
 		return v, nil
 	}
 
@@ -349,16 +368,23 @@ func (v *ConnectView) skipHiddenFields(dir int) {
 		}
 	}
 
-	// AI block: skip API key for ollama/placeholder, skip host for non-ollama
+	// AI block: skip fields based on provider
 	if v.block == blockAI {
 		provider := v.fields[fieldAIProvider]
-		if (provider == "ollama" || provider == "placeholder") && v.focusField == fieldAIAPIKey {
+		// Skip API key for ollama/placeholder/antigravity (they don't use API keys)
+		if (provider == "ollama" || provider == "placeholder" || provider == "antigravity") && v.focusField == fieldAIAPIKey {
 			v.focusField += dir
 		}
+		// Skip host for non-ollama
 		if provider != "ollama" && v.focusField == fieldAIHost {
 			v.focusField += dir
 		}
-		if provider == "placeholder" && (v.focusField == fieldAIModel || v.focusField == fieldAIHost) {
+		// Skip login button for non-antigravity
+		if provider != "antigravity" && v.focusField == fieldAILogin {
+			v.focusField += dir
+		}
+		// Skip model/host/login for placeholder
+		if provider == "placeholder" && (v.focusField == fieldAIModel || v.focusField == fieldAIHost || v.focusField == fieldAILogin) {
 			v.focusField += dir
 		}
 	}
@@ -480,6 +506,9 @@ func (v *ConnectView) handleAction() (View, tea.Cmd) {
 			v.editing = true
 		}
 		return v, nil
+
+	case fieldAILogin:
+		return v, v.antigravityLogin()
 
 	case fieldAISave:
 		return v, v.saveAIConfig()
@@ -754,6 +783,26 @@ func (v *ConnectView) applyAIConfig() {
 	case "ollama":
 		v.appCfg.AI.Ollama.Host = v.fields[fieldAIHost]
 		v.appCfg.AI.Ollama.Model = v.fields[fieldAIModel]
+	case "antigravity":
+		v.appCfg.AI.Antigravity.Model = v.fields[fieldAIModel]
+	}
+}
+
+// antigravityLogin starts the Google Antigravity OAuth login flow.
+func (v *ConnectView) antigravityLogin() tea.Cmd {
+	provider := ai.NewAntigravity(v.fields[fieldAIModel])
+	authURL, done, err := provider.Login()
+	if err != nil {
+		v.err = err
+		return nil
+	}
+
+	v.statusMsg = "🔐 Opening browser for Google login..."
+	_ = authURL // URL is already opened in browser by Login()
+
+	return func() tea.Msg {
+		err := <-done
+		return AntigravityLoginMsg{Err: err}
 	}
 }
 
@@ -882,12 +931,25 @@ func (v *ConnectView) View() string {
 	rightLines = append(rightLines, "")
 
 	if provider != "placeholder" {
-		if provider != "ollama" {
+		if provider != "ollama" && provider != "antigravity" {
 			rightLines = append(rightLines, v.renderMaskedField(fieldAIAPIKey, rightInputW))
 		}
 		rightLines = append(rightLines, v.renderField(fieldAIModel, rightInputW))
 		if provider == "ollama" {
 			rightLines = append(rightLines, v.renderField(fieldAIHost, rightInputW))
+		}
+		if provider == "antigravity" {
+			// Show login status
+			ag := ai.NewAntigravity(v.fields[fieldAIModel])
+			if ag.IsLoggedIn() {
+				rightLines = append(rightLines,
+					lipgloss.NewStyle().Foreground(ColorSuccess).Render("  ✅ Logged in"))
+			} else {
+				rightLines = append(rightLines,
+					lipgloss.NewStyle().Foreground(ColorWarning).Render("  ⚠ Not logged in"))
+			}
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, v.renderButton(fieldAILogin))
 		}
 	}
 

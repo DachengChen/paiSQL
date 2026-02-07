@@ -179,14 +179,14 @@ func (a *App) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 // initViews creates all main views after connection is established.
 func (a *App) initViews() {
 	a.views = []View{
-		NewSQLView(a.db),
+		NewSQLView(a.db, a.aiProvider),
 		NewExplainView(a.db),
 		NewIndexView(a.db, a.aiProvider),
 		NewStatsView(a.db),
 		NewLogView(a.db),
 		NewAIView(a.aiProvider),
 	}
-	a.activeTab = 0
+	a.activeTab = TabSQL
 }
 
 // handleKey processes keyboard input in main phase.
@@ -476,10 +476,8 @@ func (a *App) renderStatusBar() string {
 
 func (a *App) getHelpItems() []KeyBinding {
 	global := []KeyBinding{
-		{Key: "tab", Desc: "next view"},
-		{Key: "1-6", Desc: "jump tab"},
 		{Key: ":", Desc: "command"},
-		{Key: "/", Desc: "find view"},
+		{Key: "1-6", Desc: "jump tab"},
 		{Key: "?", Desc: "help"},
 		{Key: "q", Desc: "quit"},
 	}
@@ -494,6 +492,7 @@ func (a *App) renderHelp() string {
 		StyleTitle.Render("⌨ paiSQL Keyboard Shortcuts"),
 		"",
 		StyleHelpKey.Render("Tab / Shift+Tab") + "  Switch between views",
+		StyleHelpKey.Render("F2") + "               Toggle between SQL and Chat input",
 		StyleHelpKey.Render("1-6") + "              Jump to view by number",
 		StyleHelpKey.Render(":") + "                Command mode (e.g. :dt, :quit, :disconnect)",
 		StyleHelpKey.Render("/") + "                Jump to view by name",

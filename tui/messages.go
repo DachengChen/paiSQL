@@ -50,3 +50,8 @@ type LogMsg struct {
 
 // StatusMsg is a transient status message for the status bar.
 type StatusMsg string
+
+// AntigravityLoginMsg is sent when Google Antigravity OAuth login completes.
+type AntigravityLoginMsg struct {
+	Err error
+}

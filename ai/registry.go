@@ -7,7 +7,7 @@ import (
 )
 
 // SupportedProviders lists available provider names for display.
-var SupportedProviders = []string{"openai", "anthropic", "gemini", "ollama", "placeholder"}
+var SupportedProviders = []string{"openai", "anthropic", "gemini", "ollama", "antigravity", "placeholder"}
 
 // NewProvider creates an AI provider from the application config.
 // Falls back to placeholder if the selected provider isn't configured.
@@ -34,10 +34,13 @@ func NewProvider(cfg config.AIConfig) (Provider, error) {
 	case "ollama":
 		return NewOllama(cfg.Ollama.Host, cfg.Ollama.Model), nil
 
+	case "antigravity":
+		return NewAntigravity(cfg.Antigravity.Model), nil
+
 	case "placeholder", "":
 		return NewPlaceholder(), nil
 
 	default:
-		return nil, fmt.Errorf("unknown AI provider %q. Supported: openai, anthropic, ollama", cfg.Provider)
+		return nil, fmt.Errorf("unknown AI provider %q. Supported: openai, anthropic, gemini, ollama, antigravity", cfg.Provider)
 	}
 }
