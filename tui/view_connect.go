@@ -13,6 +13,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/DachengChen/paiSQL/config"
@@ -119,7 +121,9 @@ type ConnectView struct {
 	connecting bool
 	width      int
 	height     int
-	block      int // 0=connection, 1=AI
+	block      int      // 0=connection, 1=AI
+	sshKeys    []string // discovered SSH key paths
+	sshKeyIdx  int      // selected index in sshKeys
 }
 
 // ConnectedMsg is sent when a DB connection is successfully established.
@@ -164,6 +168,19 @@ func NewConnectView(store *config.ConnectionStore, appCfg *config.AppConfig) *Co
 		v.fields[fieldAIProvider] = "placeholder"
 	}
 	v.loadAIFieldsFromConfig()
+
+	// Discover SSH keys
+	v.sshKeys = discoverSSHKeys()
+	if len(v.sshKeys) > 0 && v.fields[fieldSSHKey] == "" {
+		v.fields[fieldSSHKey] = v.sshKeys[0]
+	}
+	// Set index to match current value
+	for i, k := range v.sshKeys {
+		if k == v.fields[fieldSSHKey] {
+			v.sshKeyIdx = i
+			break
+		}
+	}
 
 	return v
 }
@@ -367,6 +384,8 @@ func (v *ConnectView) handleLeft() (View, tea.Cmd) {
 		}
 	case fieldSSLMode:
 		v.cycleSSLMode(-1)
+	case fieldSSHKey:
+		v.cycleSSHKey(-1)
 	case fieldAIProvider:
 		v.cycleAIProvider(-1)
 	default:
@@ -387,6 +406,8 @@ func (v *ConnectView) handleRight() (View, tea.Cmd) {
 		}
 	case fieldSSLMode:
 		v.cycleSSLMode(1)
+	case fieldSSHKey:
+		v.cycleSSHKey(1)
 	case fieldAIProvider:
 		v.cycleAIProvider(1)
 	default:
@@ -449,6 +470,15 @@ func (v *ConnectView) handleAction() (View, tea.Cmd) {
 
 	case fieldAIProvider:
 		v.cycleAIProvider(1)
+		return v, nil
+
+	case fieldSSHKey:
+		// If we have discovered keys, cycle; otherwise allow manual edit
+		if len(v.sshKeys) > 0 {
+			v.cycleSSHKey(1)
+		} else {
+			v.editing = true
+		}
 		return v, nil
 
 	case fieldAISave:
@@ -579,6 +609,14 @@ func (v *ConnectView) loadSavedConnection(idx int) {
 	v.fields[fieldSSHUser] = c.SSH.User
 	v.fields[fieldSSHKey] = c.SSH.KeyPath
 	v.savedIdx = idx
+
+	// Sync SSH key index
+	for i, k := range v.sshKeys {
+		if k == c.SSH.KeyPath {
+			v.sshKeyIdx = i
+			break
+		}
+	}
 }
 
 func (v *ConnectView) sshEnabled() bool {
@@ -600,6 +638,65 @@ func (v *ConnectView) cycleSSLMode(dir int) {
 	}
 	idx = (idx + dir + len(sslModes)) % len(sslModes)
 	v.fields[fieldSSLMode] = sslModes[idx]
+}
+
+// cycleSSHKey cycles through discovered SSH key files.
+func (v *ConnectView) cycleSSHKey(dir int) {
+	if len(v.sshKeys) == 0 {
+		return
+	}
+	v.sshKeyIdx = (v.sshKeyIdx + dir + len(v.sshKeys)) % len(v.sshKeys)
+	v.fields[fieldSSHKey] = v.sshKeys[v.sshKeyIdx]
+}
+
+// discoverSSHKeys scans ~/.ssh/ for private key files.
+func discoverSSHKeys() []string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	sshDir := filepath.Join(homeDir, ".ssh")
+	entries, err := os.ReadDir(sshDir)
+	if err != nil {
+		return nil
+	}
+
+	var keys []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		// Skip public keys, known_hosts, config, etc.
+		if strings.HasSuffix(name, ".pub") ||
+			name == "known_hosts" ||
+			name == "known_hosts.old" ||
+			name == "config" ||
+			name == "authorized_keys" ||
+			name == "environment" {
+			continue
+		}
+
+		fullPath := filepath.Join(sshDir, name)
+
+		// Quick check: read first bytes to see if it looks like a key
+		f, err := os.Open(fullPath)
+		if err != nil {
+			continue
+		}
+		buf := make([]byte, 40)
+		n, _ := f.Read(buf)
+		f.Close()
+
+		header := string(buf[:n])
+		if strings.Contains(header, "PRIVATE KEY") ||
+			strings.Contains(header, "OPENSSH") {
+			keys = append(keys, fullPath)
+		}
+	}
+
+	return keys
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -747,7 +844,7 @@ func (v *ConnectView) View() string {
 		leftLines = append(leftLines, v.renderField(fieldSSHHost, leftInputW))
 		leftLines = append(leftLines, v.renderField(fieldSSHPort, leftInputW))
 		leftLines = append(leftLines, v.renderField(fieldSSHUser, leftInputW))
-		leftLines = append(leftLines, v.renderField(fieldSSHKey, leftInputW))
+		leftLines = append(leftLines, v.renderSSHKeyField(leftInputW))
 	}
 
 	leftLines = append(leftLines, "")
@@ -1041,4 +1138,50 @@ func (v *ConnectView) renderButton(id int) string {
 		Foreground(ColorDim).
 		Padding(0, 2).
 		Render("  " + label)
+}
+
+func (v *ConnectView) renderSSHKeyField(inputWidth int) string {
+	focused := v.focusField == fieldSSHKey
+
+	labelStr := lipgloss.NewStyle().
+		Width(16).
+		Foreground(ColorDim).
+		Render("SSH Key")
+
+	if focused {
+		labelStr = lipgloss.NewStyle().
+			Width(16).
+			Foreground(ColorAccent).
+			Bold(true).
+			Render("▸ SSH Key")
+	}
+
+	// If we have discovered keys, render as a selector
+	if len(v.sshKeys) > 0 {
+		keyPath := v.fields[fieldSSHKey]
+		keyName := filepath.Base(keyPath)
+
+		if focused {
+			selectBox := lipgloss.NewStyle().
+				Foreground(ColorAccent).
+				Render(" ◂ " + keyName + " ▸ ")
+			return labelStr + " " + selectBox
+		}
+		return labelStr + " " + StyleDimmed.Render(keyName)
+	}
+
+	// No keys discovered — fall back to editable text field
+	value := v.fields[fieldSSHKey]
+	if focused {
+		cursor := "█"
+		if !v.editing {
+			cursor = ""
+		}
+		inputBox := lipgloss.NewStyle().
+			Width(inputWidth).
+			Foreground(ColorPrimary).
+			Render(value + cursor)
+		return labelStr + " " + inputBox
+	}
+	return labelStr + " " + StyleDimmed.Render(value)
 }
