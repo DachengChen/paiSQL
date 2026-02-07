@@ -34,6 +34,8 @@ func NewAIView(provider ai.Provider) *AIView {
 
 func (v *AIView) Name() string { return "AI" }
 
+func (v *AIView) WantsTextInput() bool { return true }
+
 func (v *AIView) SetSize(width, height int) {
 	v.width = width
 	v.height = height

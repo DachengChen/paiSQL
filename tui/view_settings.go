@@ -238,7 +238,8 @@ func (v *ConnectView) loadAIFieldsFromConfig() {
 	}
 }
 
-func (v *ConnectView) Name() string { return "Settings" }
+func (v *ConnectView) Name() string         { return "Settings" }
+func (v *ConnectView) WantsTextInput() bool { return v.editing }
 
 func (v *ConnectView) SetSize(width, height int) {
 	v.width = width

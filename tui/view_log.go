@@ -34,7 +34,8 @@ func NewLogView(database *db.DB) *LogView {
 	}
 }
 
-func (v *LogView) Name() string { return "Log" }
+func (v *LogView) Name() string         { return "Log" }
+func (v *LogView) WantsTextInput() bool { return false }
 
 func (v *LogView) SetSize(width, height int) {
 	v.width = width

@@ -34,7 +34,8 @@ func NewIndexView(database *db.DB, provider ai.Provider) *IndexView {
 	}
 }
 
-func (v *IndexView) Name() string { return "Index" }
+func (v *IndexView) Name() string         { return "Index" }
+func (v *IndexView) WantsTextInput() bool { return false }
 
 func (v *IndexView) SetSize(width, height int) {
 	v.width = width

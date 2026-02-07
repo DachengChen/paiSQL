@@ -202,14 +202,38 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q", "ctrl+c":
-		return a, tea.Quit
+	// When the active view is accepting text input (chat, SQL editor),
+	// only intercept non-text keys. Let everything else pass through.
+	textMode := a.activeTab < len(a.views) && a.views[a.activeTab].WantsTextInput()
 
-	case ":":
-		a.mode = ModeCommand
-		a.cmdInput = ""
+	if textMode {
+		// In text mode, only allow escape-key combos and function keys
+		switch msg.String() {
+		case "ctrl+c":
+			return a, tea.Quit
+		case "f1":
+			return a.switchTab(0)
+		case "f2":
+			// Let the view handle F2 (e.g. toggle SQL/Chat)
+		case "?":
+			// Let ? be typed as text
+		default:
+			// Fall through to forward to view
+		}
+
+		// Forward to active view
+		if a.activeTab < len(a.views) {
+			updatedView, cmd := a.views[a.activeTab].Update(msg)
+			a.views[a.activeTab] = updatedView
+			return a, cmd
+		}
 		return a, nil
+	}
+
+	// Normal mode: handle global shortcuts
+	switch msg.String() {
+	case "ctrl+c":
+		return a, tea.Quit
 
 	case "/":
 		a.mode = ModeJump
@@ -219,19 +243,6 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		a.showHelp = !a.showHelp
 		return a, nil
-
-	case "1":
-		return a.switchTab(0)
-	case "2":
-		return a.switchTab(1)
-	case "3":
-		return a.switchTab(2)
-	case "4":
-		return a.switchTab(3)
-	case "5":
-		return a.switchTab(4)
-	case "6":
-		return a.switchTab(5)
 	}
 
 	// Forward to active view
@@ -476,10 +487,8 @@ func (a *App) renderStatusBar() string {
 
 func (a *App) getHelpItems() []KeyBinding {
 	global := []KeyBinding{
-		{Key: ":", Desc: "command"},
-		{Key: "1-6", Desc: "jump tab"},
 		{Key: "?", Desc: "help"},
-		{Key: "q", Desc: "quit"},
+		{Key: "Ctrl+C", Desc: "quit"},
 	}
 	if a.activeTab < len(a.views) {
 		return append(a.views[a.activeTab].ShortHelp(), global...)
@@ -493,11 +502,9 @@ func (a *App) renderHelp() string {
 		"",
 		StyleHelpKey.Render("Tab / Shift+Tab") + "  Switch between views",
 		StyleHelpKey.Render("F2") + "               Toggle between SQL and Chat input",
-		StyleHelpKey.Render("1-6") + "              Jump to view by number",
-		StyleHelpKey.Render(":") + "                Command mode (e.g. :dt, :quit, :disconnect)",
 		StyleHelpKey.Render("/") + "                Jump to view by name",
 		StyleHelpKey.Render("?") + "                Toggle this help",
-		StyleHelpKey.Render("q / Ctrl+C") + "       Quit",
+		StyleHelpKey.Render("Ctrl+C") + "          Quit",
 		"",
 		StyleTitle.Render("View-specific"),
 		"",

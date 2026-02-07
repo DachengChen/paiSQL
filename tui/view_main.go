@@ -89,6 +89,10 @@ func NewMainView(database *db.DB, provider ai.Provider) *MainView {
 
 func (v *MainView) Name() string { return "Main" }
 
+func (v *MainView) WantsTextInput() bool {
+	return v.inputMode == inputModeChat || v.focus == focusInput
+}
+
 func (v *MainView) SetSize(width, height int) {
 	v.width = width
 	v.height = height
@@ -607,10 +611,64 @@ func (v *MainView) sendChatMessage() tea.Cmd {
 	msgs := make([]ai.Message, len(v.chatMessages))
 	copy(msgs, v.chatMessages)
 
+	// Inject database context as system message
+	ctxMsg := v.buildDBContext()
+	if ctxMsg != "" {
+		msgs = append([]ai.Message{{Role: "system", Content: ctxMsg}}, msgs...)
+	}
+
+	provider := v.aiProvider
 	return func() tea.Msg {
-		resp, err := v.aiProvider.Chat(context.Background(), msgs)
+		resp, err := provider.Chat(context.Background(), msgs)
 		return AIResponseMsg{Response: resp, Err: err}
 	}
+}
+
+// buildDBContext returns a system message with the current database context.
+func (v *MainView) buildDBContext() string {
+	if v.db == nil {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Current Database Context\n")
+
+	// Include selected table schema if available
+	if v.tableIdx >= 0 && v.tableIdx < len(v.tables) {
+		table := v.tables[v.tableIdx]
+		sb.WriteString(fmt.Sprintf("\nSelected table: %s\n", table))
+
+		// Row count
+		if v.tableIdx < len(v.tableRows) {
+			sb.WriteString(fmt.Sprintf("Estimated rows: %d\n", v.tableRows[v.tableIdx]))
+		}
+
+		// Fetch column info
+		result, err := v.db.DescribeTable(context.Background(), "public", table)
+		if err == nil && result != nil && len(result.Rows) > 0 {
+			sb.WriteString("\nColumns:\n")
+			for _, row := range result.Rows {
+				if len(row) >= 4 {
+					// column_name, data_type, is_nullable, default, key
+					line := fmt.Sprintf("  - %s %s", row[0], row[1])
+					if len(row) >= 5 && row[4] != "" {
+						line += " (" + row[4] + ")"
+					}
+					if row[2] == "NO" {
+						line += " NOT NULL"
+					}
+					if row[3] != "" {
+						line += " DEFAULT " + row[3]
+					}
+					sb.WriteString(line + "\n")
+				}
+			}
+		}
+	}
+
+	sb.WriteString("\nWhen the user asks about 'this table' or gives a natural language query, generate SQL for the selected table above.")
+	sb.WriteString("\nAlways output executable PostgreSQL queries the user can copy-paste.")
+	return sb.String()
 }
 
 func (v *MainView) renderChatHistory() []string {

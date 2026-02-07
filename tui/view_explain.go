@@ -31,7 +31,8 @@ func NewExplainView(database *db.DB) *ExplainView {
 	}
 }
 
-func (v *ExplainView) Name() string { return "Explain" }
+func (v *ExplainView) Name() string         { return "Explain" }
+func (v *ExplainView) WantsTextInput() bool { return false }
 
 func (v *ExplainView) SetSize(width, height int) {
 	v.width = width
