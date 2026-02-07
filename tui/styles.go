@@ -4,75 +4,74 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Color palette — dark theme with accent colors.
+// Simple Palette inspired by standard terminal dark themes
 var (
-	ColorPrimary     = lipgloss.Color("#7C3AED") // Violet
-	ColorSecondary   = lipgloss.Color("#06B6D4") // Cyan
-	ColorAccent      = lipgloss.Color("#F59E0B") // Amber
-	ColorSuccess     = lipgloss.Color("#10B981") // Emerald
-	ColorError       = lipgloss.Color("#EF4444") // Red
-	ColorWarning     = lipgloss.Color("#F59E0B") // Amber
-	ColorMuted       = lipgloss.Color("#6B7280") // Gray
-	ColorBg          = lipgloss.Color("#1E1E2E") // Dark bg
-	ColorBgAlt       = lipgloss.Color("#2D2D3F") // Slightly lighter
-	ColorFg          = lipgloss.Color("#CDD6F4") // Light text
-	ColorFgDim       = lipgloss.Color("#6C7086") // Dimmed text
-	ColorBorder      = lipgloss.Color("#45475A") // Border
-	ColorTabActive   = lipgloss.Color("#CBA6F7") // Active tab
-	ColorTabInactive = lipgloss.Color("#585B70") // Inactive tab
+	// Colors
+	ColorPrimary   = lipgloss.Color("255") // White
+	ColorSecondary = lipgloss.Color("240") // Dark Gray
+	ColorAccent    = lipgloss.Color("39")  // Blue / Cyan
+	ColorSuccess   = lipgloss.Color("42")  // Green
+	ColorError     = lipgloss.Color("196") // Red
+	ColorWarning   = lipgloss.Color("214") // Orange
+	ColorDim       = lipgloss.Color("240") // Dimmed text
+
+	// Backgrounds (only used for highlighting lines or headers)
+	ColorHighlightBg = lipgloss.Color("236") // Very dark gray background for active items
+
+	// Legacy aliases for compatibility
+	ColorBgAlt = ColorHighlightBg
+	ColorFgDim = ColorDim
 )
 
-// Shared styles used across views.
+// Shared styles - minimal and clean
 var (
+	// Standard Text
+	StyleNormal = lipgloss.NewStyle().Foreground(ColorPrimary)
+	StyleDimmed = lipgloss.NewStyle().Foreground(ColorDim)
+	StyleBold   = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
+
+	// Status & Feedback
+	StyleSuccess = lipgloss.NewStyle().Foreground(ColorSuccess)
+	StyleError   = lipgloss.NewStyle().Foreground(ColorError).Bold(true)
+	StyleWarning = lipgloss.NewStyle().Foreground(ColorWarning)
+
+	// UI Elements
+	StyleBorder = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorSecondary)
+
+	StyleTitle  = lipgloss.NewStyle().Bold(true).Foreground(ColorAccent).MarginBottom(1)
+	StylePrompt = lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
+
+	// Tab Bar
 	StyleTabActive = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(ColorBg).
-			Background(ColorTabActive).
-			Padding(0, 2)
+			Foreground(ColorAccent).
+			Padding(0, 1)
 
 	StyleTabInactive = lipgloss.NewStyle().
-				Foreground(ColorFgDim).
-				Background(ColorBgAlt).
-				Padding(0, 2)
+				Foreground(ColorDim).
+				Padding(0, 1)
 
+	// Connection List Item (Active)
+	StyleListItemActive = lipgloss.NewStyle().
+				Foreground(ColorAccent).
+				Bold(true)
+
+	// Form Focus
+	StyleInputFocused = lipgloss.NewStyle().
+				Foreground(ColorAccent).
+				Bold(true)
+
+	// Bottom Bar
 	StyleStatusBar = lipgloss.NewStyle().
-			Foreground(ColorFg).
-			Background(ColorBgAlt).
-			Padding(0, 1).
-			Width(80) // overridden at render time
+			Foreground(ColorSecondary)
 
+	// Help Keys
 	StyleHelpKey = lipgloss.NewStyle().
 			Foreground(ColorAccent).
 			Bold(true)
 
 	StyleHelpDesc = lipgloss.NewStyle().
-			Foreground(ColorFgDim)
-
-	StyleTitle = lipgloss.NewStyle().
-			Foreground(ColorPrimary).
-			Bold(true).
-			MarginBottom(1)
-
-	StyleError = lipgloss.NewStyle().
-			Foreground(ColorError).
-			Bold(true)
-
-	StyleSuccess = lipgloss.NewStyle().
-			Foreground(ColorSuccess)
-
-	StyleBorder = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorBorder).
-			Padding(0, 1)
-
-	StylePrompt = lipgloss.NewStyle().
-			Foreground(ColorSecondary).
-			Bold(true)
-
-	StyleDimmed = lipgloss.NewStyle().
-			Foreground(ColorFgDim)
-
-	StyleWarning = lipgloss.NewStyle().
-			Foreground(ColorWarning).
-			Bold(true)
+			Foreground(ColorDim)
 )

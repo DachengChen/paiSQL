@@ -14,6 +14,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/DachengChen/paiSQL/ai"
@@ -22,6 +23,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+const appVersion = "0.1.0"
 
 // Tab indices for connected mode.
 const (
@@ -94,12 +97,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
+		// header(1) + border(2) + helpbar(1) = 4 lines of chrome
+		contentH := a.height - 4
+		contentW := a.width - 2 // border left+right
 		if a.phase == PhaseConnect {
-			a.connectView.SetSize(a.width, a.height-1)
+			a.connectView.SetSize(contentW, contentH)
 		} else {
-			contentHeight := a.height - 3
+			// tab bar(1) + status bar(1) inside the border
+			viewH := contentH - 2
 			for _, v := range a.views {
-				v.SetSize(a.width, contentHeight)
+				v.SetSize(contentW, viewH)
 			}
 		}
 		return a, nil
@@ -113,9 +120,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.aiProvider = ai.NewPlaceholder()
 		a.initViews()
 		// Trigger resize for views
-		contentHeight := a.height - 3
+		contentW := a.width - 2
+		viewH := a.height - 4 - 2 // chrome - tab/status
 		for _, v := range a.views {
-			v.SetSize(a.width, contentHeight)
+			v.SetSize(contentW, viewH)
 		}
 		return a, a.views[a.activeTab].Init()
 
@@ -340,43 +348,93 @@ func (a *App) disconnect() {
 }
 
 // View implements tea.Model.
+// View implements tea.Model.
 func (a *App) View() string {
 	if a.width == 0 {
 		return "loading..."
 	}
 
+	// ── Header bar ──
+	header := a.renderHeader()
+
+	// ── Help bar ──
+	var helpBar string
+
+	frameBox := StyleBorder.
+		Width(a.width - 2).
+		Height(a.height - 3) // header + helpbar + border chrome
+
 	if a.phase == PhaseConnect {
 		content := a.connectView.View()
-		helpBar := a.renderConnectHelpBar()
-		return lipgloss.JoinVertical(lipgloss.Left, content, helpBar)
+		helpBar = a.renderConnectHelpBar()
+		frame := frameBox.Render(content)
+		return lipgloss.JoinVertical(lipgloss.Left, header, frame, helpBar)
 	}
 
-	var sections []string
+	// Main phase: tab bar + content + status inside a border
+	var innerSections []string
+	innerSections = append(innerSections, a.renderTabBar())
 
-	// 1. Tab bar
-	sections = append(sections, a.renderTabBar())
-
-	// 2. Content area
 	if a.showHelp {
-		sections = append(sections, a.renderHelp())
+		innerSections = append(innerSections, a.renderHelp())
 	} else if a.activeTab < len(a.views) {
-		sections = append(sections, a.views[a.activeTab].View())
+		innerSections = append(innerSections, a.views[a.activeTab].View())
 	}
 
-	// 3. Status / input bar
-	sections = append(sections, a.renderStatusBar())
+	innerSections = append(innerSections, a.renderStatusBar())
+	innerContent := lipgloss.JoinVertical(lipgloss.Left, innerSections...)
 
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	frame := frameBox.Render(innerContent)
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, frame)
+}
+
+// renderHeader draws a simple text bar: logo + version + connection info.
+func (a *App) renderHeader() string {
+	logo := StyleBold.Render("🐘 paiSQL")
+	version := StyleDimmed.Render(" v" + appVersion)
+
+	left := logo + version
+
+	// Right side: connection info + screen size
+	var right string
+	if a.phase == PhaseMain && a.connName != "" {
+		right = StyleSuccess.Render("⚡ " + a.connName)
+	} else if a.phase == PhaseMain {
+		right = StyleSuccess.Render("⚡ connected")
+	}
+
+	// Add dimensions dimmed
+	right += "  " + StyleDimmed.Render(fmt.Sprintf("%d×%d", a.width, a.height))
+
+	// Fill gap with spaces (transparent)
+	gap := a.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	filler := strings.Repeat(" ", gap)
+
+	// No background color set - relies on terminal default
+	return lipgloss.NewStyle().
+		Width(a.width).
+		Render(left + filler + right)
 }
 
 func (a *App) renderConnectHelpBar() string {
 	help := a.connectView.ShortHelp()
 	var parts []string
 	for _, h := range help {
-		parts = append(parts,
-			StyleHelpKey.Render(h.Key)+" "+StyleHelpDesc.Render(h.Desc))
+		key := StyleHelpKey.Render(h.Key)
+		desc := StyleHelpDesc.Render(h.Desc)
+		parts = append(parts, key+" "+desc)
 	}
-	return StyleStatusBar.Width(a.width).Render(strings.Join(parts, "  │  "))
+
+	content := strings.Join(parts, StyleDimmed.Render("  │  "))
+
+	return lipgloss.NewStyle().
+		Width(a.width).
+		Padding(0, 1).
+		Render(content)
 }
 
 func (a *App) renderTabBar() string {

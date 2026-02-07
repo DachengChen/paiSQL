@@ -1,4 +1,4 @@
-// view_connect.go — Connection setup screen.
+// view_connect.go — Connection setup screen with k9s-style bordered frame.
 //
 // This is the first screen shown when paiSQL starts. The user can:
 //   - Fill in connection details (host, port, user, password, etc.)
@@ -57,9 +57,9 @@ var fieldLabels = map[int]string{
 	fieldSSHPort:    "SSH Port",
 	fieldSSHUser:    "SSH User",
 	fieldSSHKey:     "SSH Key",
-	fieldConnect:    "[ Connect ]",
-	fieldSave:       "[ Save ]",
-	fieldDelete:     "[ Delete ]",
+	fieldConnect:    "Connect",
+	fieldSave:       "Save",
+	fieldDelete:     "Delete",
 }
 
 // SSL mode options for cycling.
@@ -98,7 +98,6 @@ func NewConnectView(store *config.ConnectionStore) *ConnectView {
 		focusField: fieldHost,
 	}
 
-	// Load defaults
 	def := config.DefaultConnection()
 	v.fields[fieldHost] = def.Host
 	v.fields[fieldPort] = def.Port
@@ -109,7 +108,6 @@ func NewConnectView(store *config.ConnectionStore) *ConnectView {
 	v.fields[fieldSSHEnabled] = "no"
 	v.fields[fieldSSHPort] = def.SSH.Port
 
-	// If there are saved connections, select the first one
 	if len(store.Connections) > 0 {
 		v.loadSavedConnection(0)
 		v.focusField = fieldSaved
@@ -130,11 +128,13 @@ func (v *ConnectView) ShortHelp() []KeyBinding {
 		return []KeyBinding{
 			{Key: "Enter", Desc: "confirm"},
 			{Key: "Esc", Desc: "cancel"},
+			{Key: "Ctrl+U", Desc: "clear"},
 		}
 	}
 	return []KeyBinding{
 		{Key: "↑/↓", Desc: "navigate"},
 		{Key: "Enter", Desc: "edit/action"},
+		{Key: "Tab", Desc: "connect"},
 		{Key: "Ctrl+C", Desc: "quit"},
 	}
 }
@@ -150,7 +150,6 @@ func (v *ConnectView) Update(msg tea.Msg) (View, tea.Cmd) {
 		return v.handleNavigation(msg)
 
 	case ConnectedMsg:
-		// Handled by App
 		return v, nil
 
 	case ConnectErrorMsg:
@@ -170,25 +169,21 @@ func (v *ConnectView) handleNavigation(msg tea.KeyMsg) (View, tea.Cmd) {
 		if v.focusField < 0 {
 			v.focusField = fieldCount - 1
 		}
-		// Skip SSH fields if SSH is disabled
 		if !v.sshEnabled() && v.isSSHField(v.focusField) {
 			v.focusField = fieldSSHEnabled - 1
 		}
-		// Skip saved if no saved connections
 		if v.focusField == fieldSaved && len(v.store.Connections) == 0 {
 			v.focusField = fieldCount - 1
 		}
 
 	case "down", "j":
 		v.focusField++
-		// Skip SSH fields if SSH is disabled
 		if !v.sshEnabled() && v.isSSHField(v.focusField) {
 			v.focusField = fieldConnect
 		}
 		if v.focusField >= fieldCount {
 			v.focusField = 0
 		}
-		// Skip saved if no saved connections
 		if v.focusField == fieldSaved && len(v.store.Connections) == 0 {
 			v.focusField = fieldName
 		}
@@ -197,7 +192,6 @@ func (v *ConnectView) handleNavigation(msg tea.KeyMsg) (View, tea.Cmd) {
 		return v.handleAction()
 
 	case "tab":
-		// Quick jump to Connect button
 		v.focusField = fieldConnect
 		return v, nil
 
@@ -261,11 +255,9 @@ func (v *ConnectView) handleEditing(msg tea.KeyMsg) (View, tea.Cmd) {
 func (v *ConnectView) handleAction() (View, tea.Cmd) {
 	switch v.focusField {
 	case fieldSaved:
-		// Already handled by left/right
 		return v, nil
 
 	case fieldSSHEnabled:
-		// Toggle SSH
 		if v.sshEnabled() {
 			v.fields[fieldSSHEnabled] = "no"
 		} else {
@@ -287,7 +279,6 @@ func (v *ConnectView) handleAction() (View, tea.Cmd) {
 		return v, v.deleteConnection()
 
 	default:
-		// Enter editing mode for text fields
 		v.editing = true
 		return v, nil
 	}
@@ -329,7 +320,6 @@ func (v *ConnectView) saveConnection() tea.Cmd {
 	v.statusMsg = fmt.Sprintf("Connection '%s' saved!", name)
 	v.err = nil
 
-	// Update saved index
 	for i, c := range v.store.Connections {
 		if c.Name == name {
 			v.savedIdx = i
@@ -427,162 +417,242 @@ func (v *ConnectView) cycleSSLMode(dir int) {
 	v.fields[fieldSSLMode] = sslModes[idx]
 }
 
-// View renders the connection form.
+// ─────────────────────────────────────────────────────────────
+// View rendering — k9s-style bordered frame
+// ─────────────────────────────────────────────────────────────
+
 func (v *ConnectView) View() string {
-	// Layout styles
-	titleStyle := lipgloss.NewStyle().
-		Foreground(ColorPrimary).
-		Bold(true).
-		MarginBottom(1)
+	formWidth := 60
+	if v.width > 0 && formWidth > v.width-4 {
+		formWidth = v.width - 4
+	}
+	inputWidth := formWidth - 20 // label takes ~18 chars
 
-	sectionStyle := lipgloss.NewStyle().
-		Foreground(ColorSecondary).
-		Bold(true)
+	var formLines []string
 
-	var lines []string
-
-	// Title
-	lines = append(lines, titleStyle.Render("  🐘 paiSQL — Connect to PostgreSQL"))
-	lines = append(lines, "")
-
-	// Saved connections
+	// ── Saved Connections ──
 	if len(v.store.Connections) > 0 {
-		lines = append(lines, sectionStyle.Render("  Saved Connections"))
-		savedLine := "  "
+		formLines = append(formLines, v.sectionHeader("Saved Connections", formWidth-2))
+		savedLine := ""
 		for i, c := range v.store.Connections {
 			label := c.Name
 			if i == v.savedIdx {
 				if v.focusField == fieldSaved {
-					savedLine += StyleTabActive.Render(" ► " + label + " ")
+					savedLine += StyleListItemActive.Render(" ► " + label + " ")
 				} else {
-					savedLine += lipgloss.NewStyle().Foreground(ColorTabActive).Render(" ► " + label + " ")
+					savedLine += lipgloss.NewStyle().
+						Foreground(ColorAccent).
+						Render(" ► " + label + " ")
 				}
 			} else {
 				savedLine += StyleDimmed.Render("   " + label + " ")
 			}
 		}
-		lines = append(lines, savedLine)
-		lines = append(lines, "")
+		formLines = append(formLines, savedLine)
+		formLines = append(formLines, "")
 	}
 
-	// Connection settings
-	lines = append(lines, sectionStyle.Render("  Connection"))
-	lines = append(lines, v.renderField(fieldName, 14))
-	lines = append(lines, v.renderField(fieldHost, 14))
-	lines = append(lines, v.renderField(fieldPort, 14))
-	lines = append(lines, v.renderField(fieldUser, 14))
-	lines = append(lines, v.renderPasswordField(14))
-	lines = append(lines, v.renderField(fieldDatabase, 14))
-	lines = append(lines, v.renderSelectField(fieldSSLMode, 14))
-	lines = append(lines, "")
+	// ── Connection ──
+	formLines = append(formLines, v.sectionHeader("Connection", formWidth-2))
+	formLines = append(formLines, v.renderField(fieldName, inputWidth))
+	formLines = append(formLines, v.renderField(fieldHost, inputWidth))
+	formLines = append(formLines, v.renderField(fieldPort, inputWidth))
+	formLines = append(formLines, v.renderField(fieldUser, inputWidth))
+	formLines = append(formLines, v.renderPasswordField(inputWidth))
+	formLines = append(formLines, v.renderField(fieldDatabase, inputWidth))
+	formLines = append(formLines, v.renderSelectField(fieldSSLMode, inputWidth))
+	formLines = append(formLines, "")
 
-	// SSH tunnel section
-	lines = append(lines, sectionStyle.Render("  SSH Tunnel"))
-	lines = append(lines, v.renderToggleField(fieldSSHEnabled, 14))
+	// ── SSH Tunnel ──
+	formLines = append(formLines, v.sectionHeader("SSH Tunnel", formWidth-2))
+	formLines = append(formLines, v.renderToggleField(fieldSSHEnabled))
 
 	if v.sshEnabled() {
-		lines = append(lines, v.renderField(fieldSSHHost, 14))
-		lines = append(lines, v.renderField(fieldSSHPort, 14))
-		lines = append(lines, v.renderField(fieldSSHUser, 14))
-		lines = append(lines, v.renderField(fieldSSHKey, 14))
+		formLines = append(formLines, v.renderField(fieldSSHHost, inputWidth))
+		formLines = append(formLines, v.renderField(fieldSSHPort, inputWidth))
+		formLines = append(formLines, v.renderField(fieldSSHUser, inputWidth))
+		formLines = append(formLines, v.renderField(fieldSSHKey, inputWidth))
 	}
 
-	lines = append(lines, "")
+	formLines = append(formLines, "")
 
-	// Action buttons
-	btnLine := "  "
-	btnLine += v.renderButton(fieldConnect)
-	btnLine += "  "
-	btnLine += v.renderButton(fieldSave)
-	btnLine += "  "
-	btnLine += v.renderButton(fieldDelete)
-	lines = append(lines, btnLine)
+	// ── Action buttons ──
+	btnLine := v.renderButton(fieldConnect) + "  " +
+		v.renderButton(fieldSave) + "  " +
+		v.renderButton(fieldDelete)
+	formLines = append(formLines, btnLine)
 
-	lines = append(lines, "")
-
-	// Status / error
+	// ── Status line ──
 	if v.connecting {
-		lines = append(lines, "  "+StyleDimmed.Render("⏳ "+v.statusMsg))
+		formLines = append(formLines, "")
+		formLines = append(formLines, StyleDimmed.Render("⏳ "+v.statusMsg))
 	} else if v.err != nil {
-		lines = append(lines, "  "+StyleError.Render("✗ "+v.err.Error()))
+		formLines = append(formLines, "")
+		formLines = append(formLines, StyleError.Render("✗ "+v.err.Error()))
 	} else if v.statusMsg != "" {
-		lines = append(lines, "  "+StyleSuccess.Render("✓ "+v.statusMsg))
+		formLines = append(formLines, "")
+		formLines = append(formLines, StyleSuccess.Render("✓ "+v.statusMsg))
 	}
 
-	return strings.Join(lines, "\n")
+	// Wrap form content in a bordered box
+	formContent := strings.Join(formLines, "\n")
+
+	formBox := StyleBorder.
+		Padding(1, 2).
+		Width(formWidth).
+		Render(formContent)
+
+	// Center the form in the available space
+	centered := lipgloss.NewStyle().
+		Width(v.width).
+		Height(v.height).
+		Align(lipgloss.Center, lipgloss.Center).
+		Render(formBox)
+
+	return centered
 }
 
-func (v *ConnectView) renderField(id, labelWidth int) string {
+// sectionHeader renders a k9s-style section divider: ── Label ──
+func (v *ConnectView) sectionHeader(label string, width int) string {
+	labelRendered := lipgloss.NewStyle().
+		Foreground(ColorAccent).
+		Bold(true).
+		Render(label)
+
+	// Calculate dashes on each side
+	labelLen := len(label)
+	remaining := width - labelLen - 4 // " label " + some dashes
+	if remaining < 4 {
+		remaining = 4
+	}
+	left := 2
+	right := remaining - left
+
+	dashes := StyleDimmed.Render(strings.Repeat("─", left)) +
+		" " + labelRendered + " " +
+		StyleDimmed.Render(strings.Repeat("─", right))
+
+	return dashes
+}
+
+// renderField renders a form input field.
+func (v *ConnectView) renderField(id, inputWidth int) string {
 	label := fieldLabels[id]
 	value := v.fields[id]
 	focused := v.focusField == id
 
-	labelStr := fmt.Sprintf("  %-*s ", labelWidth, label+":")
-
-	if focused && v.editing {
-		return StylePrompt.Render(labelStr) +
-			lipgloss.NewStyle().Foreground(ColorFg).Background(ColorBgAlt).Render(" "+value+"█ ")
-	} else if focused {
-		return StylePrompt.Render(labelStr) +
-			lipgloss.NewStyle().Foreground(ColorFg).Background(ColorBgAlt).Render(" "+value+" ") +
-			StyleDimmed.Render(" ← Enter to edit")
-	}
-	return StyleDimmed.Render(labelStr) + value
-}
-
-func (v *ConnectView) renderPasswordField(labelWidth int) string {
-	label := "Password:"
-	value := v.fields[fieldPassword]
-	focused := v.focusField == fieldPassword
-
-	masked := strings.Repeat("•", len(value))
-	labelStr := fmt.Sprintf("  %-*s ", labelWidth, label)
-
-	if focused && v.editing {
-		return StylePrompt.Render(labelStr) +
-			lipgloss.NewStyle().Foreground(ColorFg).Background(ColorBgAlt).Render(" "+masked+"█ ")
-	} else if focused {
-		return StylePrompt.Render(labelStr) +
-			lipgloss.NewStyle().Foreground(ColorFg).Background(ColorBgAlt).Render(" "+masked+" ") +
-			StyleDimmed.Render(" ← Enter to edit")
-	}
-	return StyleDimmed.Render(labelStr) + masked
-}
-
-func (v *ConnectView) renderSelectField(id, labelWidth int) string {
-	label := fieldLabels[id]
-	value := v.fields[id]
-	focused := v.focusField == id
-
-	labelStr := fmt.Sprintf("  %-*s ", labelWidth, label+":")
+	labelStr := lipgloss.NewStyle().
+		Width(16).
+		Foreground(ColorDim).
+		Render(label)
 
 	if focused {
-		return StylePrompt.Render(labelStr) +
-			lipgloss.NewStyle().Foreground(ColorAccent).Background(ColorBgAlt).Render(" ◄ "+value+" ► ") +
-			StyleDimmed.Render(" ← / → to change")
+		labelStr = lipgloss.NewStyle().
+			Width(16).
+			Foreground(ColorAccent).
+			Bold(true).
+			Render("▸ " + label)
 	}
-	return StyleDimmed.Render(labelStr) + value
+
+	if focused {
+		cursor := "█"
+		if !v.editing {
+			cursor = ""
+		}
+		// Highlight active input with just a slightly different foreground or bold
+		inputBox := lipgloss.NewStyle().
+			Width(inputWidth).
+			Foreground(ColorPrimary).
+			Render(value + cursor)
+		return labelStr + " " + inputBox
+	}
+
+	return labelStr + " " + StyleDimmed.Render(value)
 }
 
-func (v *ConnectView) renderToggleField(id, labelWidth int) string {
+func (v *ConnectView) renderPasswordField(inputWidth int) string {
+	value := v.fields[fieldPassword]
+	focused := v.focusField == fieldPassword
+	masked := strings.Repeat("•", len(value))
+
+	labelStr := lipgloss.NewStyle().
+		Width(16).
+		Foreground(ColorDim).
+		Render("Password")
+
+	if focused {
+		labelStr = lipgloss.NewStyle().
+			Width(16).
+			Foreground(ColorAccent).
+			Bold(true).
+			Render("▸ Password")
+	}
+
+	if focused {
+		cursor := "█"
+		if !v.editing {
+			cursor = ""
+		}
+		inputBox := lipgloss.NewStyle().
+			Width(inputWidth).
+			Foreground(ColorPrimary).
+			Render(masked + cursor)
+		return labelStr + " " + inputBox
+	}
+
+	return labelStr + " " + StyleDimmed.Render(masked)
+}
+
+func (v *ConnectView) renderSelectField(id, inputWidth int) string {
+	label := fieldLabels[id]
+	value := v.fields[id]
+	focused := v.focusField == id
+
+	labelStr := lipgloss.NewStyle().
+		Width(16).
+		Foreground(ColorDim).
+		Render(label)
+
+	if focused {
+		labelStr = lipgloss.NewStyle().
+			Width(16).
+			Foreground(ColorAccent).
+			Bold(true).
+			Render("▸ " + label)
+
+		selectBox := lipgloss.NewStyle().
+			Foreground(ColorAccent).
+			Render(" ◂ " + value + " ▸ ")
+		return labelStr + " " + selectBox
+	}
+
+	return labelStr + " " + StyleDimmed.Render(value)
+}
+
+func (v *ConnectView) renderToggleField(id int) string {
 	label := fieldLabels[id]
 	enabled := v.fields[id] == "yes"
 	focused := v.focusField == id
 
-	labelStr := fmt.Sprintf("  %-*s ", labelWidth, label+":")
-
-	indicator := "○ No"
-	style := StyleDimmed
-	if enabled {
-		indicator = "● Yes"
-		style = lipgloss.NewStyle().Foreground(ColorSuccess)
-	}
+	labelStr := lipgloss.NewStyle().
+		Width(16).
+		Foreground(ColorDim).
+		Render(label)
 
 	if focused {
-		return StylePrompt.Render(labelStr) + style.Bold(true).Render(indicator) +
-			StyleDimmed.Render(" ← Enter to toggle")
+		labelStr = lipgloss.NewStyle().
+			Width(16).
+			Foreground(ColorAccent).
+			Bold(true).
+			Render("▸ " + label)
 	}
-	return StyleDimmed.Render(labelStr) + style.Render(indicator)
+
+	if enabled {
+		toggle := lipgloss.NewStyle().Foreground(ColorSuccess).Bold(true).Render("● Enabled")
+		return labelStr + " " + toggle
+	}
+	toggle := StyleDimmed.Render("○ Disabled")
+	return labelStr + " " + toggle
 }
 
 func (v *ConnectView) renderButton(id int) string {
@@ -590,17 +660,16 @@ func (v *ConnectView) renderButton(id int) string {
 	focused := v.focusField == id
 
 	if focused {
+		// Inverted style for active button
 		return lipgloss.NewStyle().
 			Bold(true).
-			Foreground(ColorBg).
-			Background(ColorPrimary).
-			Padding(0, 1).
-			Render(label)
+			Foreground(ColorPrimary).
+			Background(ColorAccent).
+			Padding(0, 2).
+			Render("⏎ " + label)
 	}
 	return lipgloss.NewStyle().
-		Foreground(ColorFgDim).
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(ColorBorder).
-		Padding(0, 1).
-		Render(label)
+		Foreground(ColorDim).
+		Padding(0, 2).
+		Render("  " + label)
 }
