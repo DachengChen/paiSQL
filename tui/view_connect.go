@@ -202,9 +202,22 @@ func (v *ConnectView) handleNavigation(msg tea.KeyMsg) (View, tea.Cmd) {
 				v.savedIdx = len(v.store.Connections) - 1
 			}
 			v.loadSavedConnection(v.savedIdx)
+			return v, nil
 		}
 		if v.focusField == fieldSSLMode {
 			v.cycleSSLMode(-1)
+			return v, nil
+		}
+		// Default: behave like UP
+		v.focusField--
+		if v.focusField < 0 {
+			v.focusField = fieldCount - 1
+		}
+		if !v.sshEnabled() && v.isSSHField(v.focusField) {
+			v.focusField = fieldSSHEnabled - 1
+		}
+		if v.focusField == fieldSaved && len(v.store.Connections) == 0 {
+			v.focusField = fieldCount - 1
 		}
 
 	case "right", "l":
@@ -214,9 +227,22 @@ func (v *ConnectView) handleNavigation(msg tea.KeyMsg) (View, tea.Cmd) {
 				v.savedIdx = 0
 			}
 			v.loadSavedConnection(v.savedIdx)
+			return v, nil
 		}
 		if v.focusField == fieldSSLMode {
 			v.cycleSSLMode(1)
+			return v, nil
+		}
+		// Default: behave like DOWN
+		v.focusField++
+		if !v.sshEnabled() && v.isSSHField(v.focusField) {
+			v.focusField = fieldConnect
+		}
+		if v.focusField >= fieldCount {
+			v.focusField = 0
+		}
+		if v.focusField == fieldSaved && len(v.store.Connections) == 0 {
+			v.focusField = fieldName
 		}
 
 	case "q", "ctrl+c":
