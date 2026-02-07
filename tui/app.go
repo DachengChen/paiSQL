@@ -103,8 +103,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.phase == PhaseConnect {
 			a.connectView.SetSize(contentW, contentH)
 		} else {
-			// tab bar(1) + status bar(1) inside the border
-			viewH := contentH - 2
+			// tab bar removed, status bar moved outside
+			// Header(1) + Status(1) + Borders(2) = 4 lines chrome
+			viewH := contentH
 			for _, v := range a.views {
 				v.SetSize(contentW, viewH)
 			}
@@ -121,7 +122,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.initViews()
 		// Trigger resize for views
 		contentW := a.width - 2
-		viewH := a.height - 4 - 2 // chrome - tab/status
+		viewH := a.height - 4 // chrome (header1 + status1 + borders2)
 		for _, v := range a.views {
 			v.SetSize(contentW, viewH)
 		}
@@ -198,14 +199,6 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return a, tea.Quit
-
-	case "tab":
-		a.activeTab = (a.activeTab + 1) % len(a.views)
-		return a, a.views[a.activeTab].Init()
-
-	case "shift+tab":
-		a.activeTab = (a.activeTab - 1 + len(a.views)) % len(a.views)
-		return a, a.views[a.activeTab].Init()
 
 	case ":":
 		a.mode = ModeCommand
@@ -371,9 +364,9 @@ func (a *App) View() string {
 		return lipgloss.JoinVertical(lipgloss.Left, header, frame, helpBar)
 	}
 
-	// Main phase: tab bar + content + status inside a border
+	// Main phase: content inside a border, status bar at bottom outside border
 	var innerSections []string
-	innerSections = append(innerSections, a.renderTabBar())
+	// innerSections = append(innerSections, a.renderTabBar()) // User requested removal
 
 	if a.showHelp {
 		innerSections = append(innerSections, a.renderHelp())
@@ -381,12 +374,17 @@ func (a *App) View() string {
 		innerSections = append(innerSections, a.views[a.activeTab].View())
 	}
 
-	innerSections = append(innerSections, a.renderStatusBar())
 	innerContent := lipgloss.JoinVertical(lipgloss.Left, innerSections...)
 
-	frame := frameBox.Render(innerContent)
+	// Frame height = Total - Header(1) - Status(1)
+	frame := StyleBorder.
+		Width(a.width - 2).
+		Height(a.height - 2).
+		Render(innerContent)
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, frame)
+	statusBar := a.renderStatusBar()
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, frame, statusBar)
 }
 
 // renderHeader draws a simple text bar: logo + version + connection info.
