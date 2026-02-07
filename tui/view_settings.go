@@ -46,8 +46,10 @@ const (
 	fieldAIProvider
 	fieldAIAPIKey
 	fieldAIModel
-	fieldAIHost  // only for Ollama
-	fieldAILogin // only for Antigravity — "Login with Google" button
+	fieldAIHost     // only for Ollama
+	fieldAILogin    // only for Antigravity — "Login with Google" button
+	fieldAILogout   // only for Antigravity — "Logout" button
+	fieldAIAuthCode // only for Antigravity — paste callback URL from browser (SSH/remote)
 	fieldAISave
 	fieldCount // sentinel
 )
@@ -85,6 +87,8 @@ var fieldLabels = map[int]string{
 	fieldAIModel:    "Model",
 	fieldAIHost:     "Host",
 	fieldAILogin:    "Login with Google",
+	fieldAILogout:   "Logout",
+	fieldAIAuthCode: "Paste URL/Code",
 	fieldAISave:     "Save AI",
 }
 
@@ -129,6 +133,12 @@ type ConnectView struct {
 	block      int      // 0=connection, 1=AI
 	sshKeys    []string // discovered SSH key paths
 	sshKeyIdx  int      // selected index in sshKeys
+
+	// OAuth manual-code-entry state (for SSH/remote login)
+	oauthPending     bool            // true while waiting for OAuth completion
+	oauthAuthURL     string          // the Google auth URL for the user to copy
+	oauthRedirectURI string          // redirect URI needed for code exchange
+	oauthProvider    *ai.Antigravity // the provider instance for this login attempt
 }
 
 // ConnectedMsg is sent when a DB connection is successfully established.
@@ -266,6 +276,8 @@ func (v *ConnectView) Update(msg tea.Msg) (View, tea.Cmd) {
 		return v, nil
 
 	case AntigravityLoginMsg:
+		v.oauthPending = false
+		v.oauthAuthURL = ""
 		if msg.Err != nil {
 			v.err = msg.Err
 			v.statusMsg = ""
@@ -379,8 +391,23 @@ func (v *ConnectView) skipHiddenFields(dir int) {
 		if provider != "antigravity" && v.focusField == fieldAILogin {
 			v.focusField += dir
 		}
-		// Skip model/host/login for placeholder
-		if provider == "placeholder" && (v.focusField == fieldAIModel || v.focusField == fieldAIHost || v.focusField == fieldAILogin) {
+		// Skip logout button for non-antigravity or when not logged in
+		if v.focusField == fieldAILogout {
+			if provider != "antigravity" {
+				v.focusField += dir
+			} else {
+				ag := ai.NewAntigravity(v.fields[fieldAIModel])
+				if !ag.IsLoggedIn() {
+					v.focusField += dir
+				}
+			}
+		}
+		// Skip auth code field when not in OAuth pending state
+		if (!v.oauthPending || provider != "antigravity") && v.focusField == fieldAIAuthCode {
+			v.focusField += dir
+		}
+		// Skip model/host/login/logout/authcode for placeholder
+		if provider == "placeholder" && (v.focusField == fieldAIModel || v.focusField == fieldAIHost || v.focusField == fieldAILogin || v.focusField == fieldAILogout || v.focusField == fieldAIAuthCode) {
 			v.focusField += dir
 		}
 	}
@@ -505,6 +532,12 @@ func (v *ConnectView) handleAction() (View, tea.Cmd) {
 
 	case fieldAILogin:
 		return v, v.antigravityLogin()
+
+	case fieldAILogout:
+		return v, v.antigravityLogout()
+
+	case fieldAIAuthCode:
+		return v, v.antigravityManualCode()
 
 	case fieldAISave:
 		return v, v.saveAIConfig()
@@ -787,17 +820,59 @@ func (v *ConnectView) applyAIConfig() {
 // antigravityLogin starts the Google Antigravity OAuth login flow.
 func (v *ConnectView) antigravityLogin() tea.Cmd {
 	provider := ai.NewAntigravity(v.fields[fieldAIModel])
-	authURL, done, err := provider.Login()
+	authURL, redirectURI, done, err := provider.Login()
 	if err != nil {
 		v.err = err
 		return nil
 	}
 
-	v.statusMsg = "🔐 Opening browser for Google login..."
-	_ = authURL // URL is already opened in browser by Login()
+	// Store state for manual code entry (SSH/remote scenario)
+	v.oauthPending = true
+	v.oauthAuthURL = authURL
+	v.oauthRedirectURI = redirectURI
+	v.oauthProvider = provider
+	v.fields[fieldAIAuthCode] = ""
+	v.statusMsg = "🔐 Opening browser for Google login... If no browser, copy the URL below."
 
 	return func() tea.Msg {
 		err := <-done
+		return AntigravityLoginMsg{Err: err}
+	}
+}
+
+// antigravityLogout clears the cached Antigravity OAuth credentials.
+func (v *ConnectView) antigravityLogout() tea.Cmd {
+	provider := ai.NewAntigravity(v.fields[fieldAIModel])
+	if err := provider.Logout(); err != nil {
+		v.err = err
+		return nil
+	}
+	v.oauthPending = false
+	v.oauthAuthURL = ""
+	v.oauthProvider = nil
+	v.statusMsg = "🔓 Logged out from Antigravity."
+	v.err = nil
+	return nil
+}
+
+// antigravityManualCode handles manual code/URL submission for SSH/remote OAuth.
+func (v *ConnectView) antigravityManualCode() tea.Cmd {
+	callbackInput := strings.TrimSpace(v.fields[fieldAIAuthCode])
+	if callbackInput == "" {
+		v.err = fmt.Errorf("paste the callback URL from your browser's address bar")
+		return nil
+	}
+
+	provider := v.oauthProvider
+	redirectURI := v.oauthRedirectURI
+	if provider == nil {
+		provider = ai.NewAntigravity(v.fields[fieldAIModel])
+	}
+
+	v.statusMsg = "🔐 Exchanging code..."
+
+	return func() tea.Msg {
+		err := provider.CompleteLoginWithCode(callbackInput, redirectURI)
 		return AntigravityLoginMsg{Err: err}
 	}
 }
@@ -949,6 +1024,38 @@ func (v *ConnectView) View() string {
 			}
 			rightLines = append(rightLines, "")
 			rightLines = append(rightLines, v.renderButton(fieldAILogin))
+			if ag.IsLoggedIn() {
+				rightLines = append(rightLines, v.renderButton(fieldAILogout))
+			}
+
+			// Show auth URL and paste field when OAuth is pending
+			if v.oauthPending && v.oauthAuthURL != "" {
+				rightLines = append(rightLines, "")
+				rightLines = append(rightLines,
+					lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).
+						Render("  📋 Copy this URL to your browser:"))
+				// Wrap URL across multiple lines so user can copy the full URL
+				urlStr := v.oauthAuthURL
+				wrapW := rightInputW + 10
+				if wrapW < 20 {
+					wrapW = 20
+				}
+				for len(urlStr) > 0 {
+					end := wrapW
+					if end > len(urlStr) {
+						end = len(urlStr)
+					}
+					rightLines = append(rightLines,
+						lipgloss.NewStyle().Foreground(ColorAccent).
+							Render("  "+urlStr[:end]))
+					urlStr = urlStr[end:]
+				}
+				rightLines = append(rightLines, "")
+				rightLines = append(rightLines,
+					lipgloss.NewStyle().Foreground(ColorDim).
+						Render("  After login, paste the callback URL here:"))
+				rightLines = append(rightLines, v.renderField(fieldAIAuthCode, rightInputW))
+			}
 		}
 	}
 

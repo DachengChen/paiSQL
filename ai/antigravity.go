@@ -134,12 +134,13 @@ func (a *Antigravity) LoggedInEmail() string {
 // 4. Exchanges the code for access + refresh tokens
 // 5. Caches the tokens to disk
 //
-// Returns the auth URL for display and a channel that signals completion.
-func (a *Antigravity) Login() (authURL string, done <-chan error, err error) {
+// Returns the auth URL for display, the redirect URI (needed for manual code
+// exchange in SSH/remote scenarios), and a channel that signals completion.
+func (a *Antigravity) Login() (authURL string, redirectURIOut string, done <-chan error, err error) {
 	// Find an available port
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to start OAuth callback server: %w", err)
+		return "", "", nil, fmt.Errorf("failed to start OAuth callback server: %w", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/oauth2callback", port)
@@ -148,7 +149,7 @@ func (a *Antigravity) Login() (authURL string, done <-chan error, err error) {
 	stateBytes := make([]byte, 32)
 	if _, err := rand.Read(stateBytes); err != nil {
 		listener.Close()
-		return "", nil, fmt.Errorf("failed to generate state: %w", err)
+		return "", "", nil, fmt.Errorf("failed to generate state: %w", err)
 	}
 	state := hex.EncodeToString(stateBytes)
 
@@ -250,7 +251,43 @@ func (a *Antigravity) Login() (authURL string, done <-chan error, err error) {
 	// Try to open the browser
 	openBrowser(authURL)
 
-	return authURL, doneCh, nil
+	return authURL, redirectURI, doneCh, nil
+}
+
+// CompleteLoginWithCode exchanges a manually-entered authorization code for
+// tokens. This is used when paiSQL runs on a remote server via SSH, where the
+// OAuth callback can't reach the server. The user authenticates in their local
+// browser, copies the callback URL (which contains the code), and pastes it
+// into paiSQL. The callbackURL can be the full redirect URL or just the code.
+func (a *Antigravity) CompleteLoginWithCode(callbackURL, redirectURI string) error {
+	// Extract the authorization code — accept either a full URL or a raw code.
+	code := callbackURL
+	if strings.Contains(callbackURL, "code=") {
+		parsed, err := url.Parse(callbackURL)
+		if err != nil {
+			return fmt.Errorf("failed to parse callback URL: %w", err)
+		}
+		code = parsed.Query().Get("code")
+	}
+	if code == "" {
+		return fmt.Errorf("no authorization code found in the provided URL")
+	}
+
+	creds, err := exchangeCodeForTokens(code, redirectURI)
+	if err != nil {
+		return fmt.Errorf("token exchange failed: %w", err)
+	}
+
+	// Fetch user email
+	if email, emailErr := fetchUserEmail(creds.AccessToken); emailErr == nil {
+		creds.Email = email
+	}
+
+	a.mu.Lock()
+	a.credentials = creds
+	a.mu.Unlock()
+
+	return saveAntigravityCredentials(creds)
 }
 
 // Logout clears cached credentials.
