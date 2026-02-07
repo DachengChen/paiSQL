@@ -96,13 +96,14 @@ var fieldLabels = map[int]string{
 var sslModes = []string{"disable", "require", "verify-ca", "verify-full", "prefer"}
 
 // AI provider options for cycling.
-var aiProviders = []string{"openai", "anthropic", "gemini", "ollama", "antigravity", "placeholder"}
+var aiProviders = []string{"openai", "anthropic", "gemini", "groq", "ollama", "antigravity", "placeholder"}
 
 // aiProviderDesc maps provider name to a short label.
 var aiProviderDesc = map[string]string{
 	"openai":      "OpenAI (GPT-4o)",
 	"anthropic":   "Anthropic (Claude)",
 	"gemini":      "Google Gemini",
+	"groq":        "Groq (fast)",
 	"ollama":      "Ollama (local)",
 	"antigravity": "Google OAuth (free)",
 	"placeholder": "None (disabled)",
@@ -113,6 +114,7 @@ var aiDefaultModels = map[string]string{
 	"openai":      "gpt-4o",
 	"anthropic":   "claude-sonnet-4-20250514",
 	"gemini":      "gemini-2.0-flash",
+	"groq":        "llama-3.1-8b-instant",
 	"ollama":      "llama3.2",
 	"antigravity": "gemini-2.0-flash",
 }
@@ -212,6 +214,9 @@ func (v *ConnectView) loadAIFieldsFromConfig() {
 	case "gemini":
 		v.fields[fieldAIAPIKey] = v.appCfg.AI.Gemini.APIKey
 		v.fields[fieldAIModel] = v.appCfg.AI.Gemini.Model
+	case "groq":
+		v.fields[fieldAIAPIKey] = v.appCfg.AI.Groq.APIKey
+		v.fields[fieldAIModel] = v.appCfg.AI.Groq.Model
 	case "ollama":
 		v.fields[fieldAIAPIKey] = ""
 		v.fields[fieldAIModel] = v.appCfg.AI.Ollama.Model
@@ -482,8 +487,11 @@ func (v *ConnectView) handleEditing(msg tea.KeyMsg) (View, tea.Cmd) {
 		v.fields[field] = ""
 
 	default:
-		ch := msg.String()
-		if len(ch) == 1 || ch == " " {
+		// Accept typed characters and pasted text.
+		// msg.Type == tea.KeyRunes covers normal typing and paste.
+		if msg.Type == tea.KeyRunes {
+			v.fields[field] += msg.String()
+		} else if ch := msg.String(); len(ch) == 1 {
 			v.fields[field] += ch
 		}
 	}
@@ -799,16 +807,21 @@ func (v *ConnectView) loadAIKeyFromConfig() {
 // applyAIConfig writes the current AI form values back to appConfig.
 func (v *ConnectView) applyAIConfig() {
 	v.appCfg.AI.Provider = v.fields[fieldAIProvider]
+	// Strip brackets that may come from terminal bracketed paste
+	apiKey := strings.Trim(v.fields[fieldAIAPIKey], "[]")
 	switch v.fields[fieldAIProvider] {
 	case "openai":
-		v.appCfg.AI.OpenAI.APIKey = v.fields[fieldAIAPIKey]
+		v.appCfg.AI.OpenAI.APIKey = apiKey
 		v.appCfg.AI.OpenAI.Model = v.fields[fieldAIModel]
 	case "anthropic":
-		v.appCfg.AI.Anthropic.APIKey = v.fields[fieldAIAPIKey]
+		v.appCfg.AI.Anthropic.APIKey = apiKey
 		v.appCfg.AI.Anthropic.Model = v.fields[fieldAIModel]
 	case "gemini":
-		v.appCfg.AI.Gemini.APIKey = v.fields[fieldAIAPIKey]
+		v.appCfg.AI.Gemini.APIKey = apiKey
 		v.appCfg.AI.Gemini.Model = v.fields[fieldAIModel]
+	case "groq":
+		v.appCfg.AI.Groq.APIKey = apiKey
+		v.appCfg.AI.Groq.Model = v.fields[fieldAIModel]
 	case "ollama":
 		v.appCfg.AI.Ollama.Host = v.fields[fieldAIHost]
 		v.appCfg.AI.Ollama.Model = v.fields[fieldAIModel]

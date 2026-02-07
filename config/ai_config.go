@@ -13,11 +13,12 @@ import (
 
 // AIConfig holds the AI provider selection and credentials.
 type AIConfig struct {
-	Provider    string            `json:"provider"` // "openai", "anthropic", "gemini", "ollama", "antigravity", "placeholder"
+	Provider    string            `json:"provider"` // "openai", "anthropic", "gemini", "groq", "ollama", "antigravity", "placeholder"
 	OpenAI      OpenAIConfig      `json:"openai"`
 	Anthropic   AnthropicConfig   `json:"anthropic"`
 	Gemini      GeminiConfig      `json:"gemini"`
 	Ollama      OllamaConfig      `json:"ollama"`
+	Groq        GroqConfig        `json:"groq"`
 	Antigravity AntigravityConfig `json:"antigravity"`
 }
 
@@ -51,6 +52,12 @@ type AntigravityConfig struct {
 	Model string `json:"model"`
 }
 
+// GroqConfig holds Groq-specific settings.
+type GroqConfig struct {
+	APIKey string `json:"api_key,omitempty"`
+	Model  string `json:"model"`
+}
+
 // AppConfig is the top-level config file structure (~/.paisql/config.json).
 type AppConfig struct {
 	AI AIConfig `json:"ai"`
@@ -75,6 +82,9 @@ func DefaultAIConfig() AIConfig {
 		},
 		Antigravity: AntigravityConfig{
 			Model: "gemini-2.0-flash",
+		},
+		Groq: GroqConfig{
+			Model: "llama-3.1-8b-instant",
 		},
 	}
 }
@@ -115,6 +125,9 @@ func LoadAppConfig() (*AppConfig, error) {
 	}
 	if envModel := os.Getenv("ANTIGRAVITY_MODEL"); envModel != "" {
 		cfg.AI.Antigravity.Model = envModel
+	}
+	if envKey := os.Getenv("GROQ_API_KEY"); envKey != "" {
+		cfg.AI.Groq.APIKey = envKey
 	}
 
 	return cfg, nil
