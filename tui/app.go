@@ -65,6 +65,7 @@ type App struct {
 	activeTab  int
 	db         *db.DB
 	aiProvider ai.Provider
+	appConfig  *config.AppConfig
 	cfg        config.Config
 	connName   string // name of active connection
 
@@ -78,11 +79,13 @@ type App struct {
 }
 
 // NewApp creates the application starting with the connection screen.
-func NewApp(store *config.ConnectionStore) *App {
+func NewApp(store *config.ConnectionStore, provider ai.Provider, appCfg *config.AppConfig) *App {
 	return &App{
 		phase:       PhaseConnect,
-		connectView: NewConnectView(store),
+		connectView: NewConnectView(store, appCfg),
 		store:       store,
+		aiProvider:  provider,
+		appConfig:   appCfg,
 	}
 }
 
@@ -118,7 +121,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.cfg = msg.Cfg
 		a.connName = msg.Conn.Name
 		a.phase = PhaseMain
-		a.aiProvider = ai.NewPlaceholder()
+		// Recreate AI provider from (potentially updated) config
+		if p, err := ai.NewProvider(a.appConfig.AI); err == nil {
+			a.aiProvider = p
+		}
 		a.initViews()
 		// Trigger resize for views
 		contentW := a.width - 2
