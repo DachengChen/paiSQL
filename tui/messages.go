@@ -26,6 +26,16 @@ type TablesListMsg struct {
 	Err    error
 }
 
+// DescribeResultMsg is sent when a table describe completes.
+type DescribeResultMsg struct {
+	Result       *db.QueryResult // columns
+	Indexes      *db.QueryResult
+	ForeignKeys  *db.QueryResult
+	ReferencedBy *db.QueryResult
+	Header       string
+	Err          error
+}
+
 // AIResponseMsg is sent when an AI request completes.
 type AIResponseMsg struct {
 	Response string

@@ -120,19 +120,94 @@ func (d *DB) listObjects(ctx context.Context, schema, tableType, label string) (
 	return results, rows.Err()
 }
 
-// DescribeTable implements \d <table> — show columns for a table.
+// DescribeTable implements \d <table> — show columns and constraints.
 func (d *DB) DescribeTable(ctx context.Context, schema, table string) (*QueryResult, error) {
 	if schema == "" {
 		schema = "public"
 	}
 	query := `
-		SELECT column_name, data_type,
-		       COALESCE(character_maximum_length::text, ''),
-		       COALESCE(column_default, ''),
-		       is_nullable
-		FROM information_schema.columns
-		WHERE table_schema = $1 AND table_name = $2
-		ORDER BY ordinal_position`
+		SELECT c.column_name,
+		       c.data_type ||
+		         CASE WHEN c.character_maximum_length IS NOT NULL
+		              THEN '(' || c.character_maximum_length || ')'
+		              ELSE '' END AS data_type,
+		       c.is_nullable,
+		       COALESCE(c.column_default, ''),
+		       CASE WHEN pk.column_name IS NOT NULL THEN 'PK' ELSE '' END AS key
+		FROM information_schema.columns c
+		LEFT JOIN (
+		  SELECT kcu.column_name
+		  FROM information_schema.table_constraints tc
+		  JOIN information_schema.key_column_usage kcu
+		    ON tc.constraint_name = kcu.constraint_name
+		    AND tc.table_schema = kcu.table_schema
+		  WHERE tc.table_schema = $1
+		    AND tc.table_name = $2
+		    AND tc.constraint_type = 'PRIMARY KEY'
+		) pk ON pk.column_name = c.column_name
+		WHERE c.table_schema = $1 AND c.table_name = $2
+		ORDER BY c.ordinal_position`
+	return d.executeQuery(ctx, query, schema, table)
+}
+
+// TableIndexes returns indexes for a table.
+func (d *DB) TableIndexes(ctx context.Context, schema, table string) (*QueryResult, error) {
+	if schema == "" {
+		schema = "public"
+	}
+	query := `
+		SELECT indexname, indexdef
+		FROM pg_indexes
+		WHERE schemaname = $1 AND tablename = $2
+		ORDER BY indexname`
+	return d.executeQuery(ctx, query, schema, table)
+}
+
+// TableForeignKeys returns FK constraints where this table references other tables.
+func (d *DB) TableForeignKeys(ctx context.Context, schema, table string) (*QueryResult, error) {
+	if schema == "" {
+		schema = "public"
+	}
+	query := `
+		SELECT tc.constraint_name,
+		       kcu.column_name,
+		       ccu.table_name AS foreign_table,
+		       ccu.column_name AS foreign_column
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+		  ON tc.constraint_name = kcu.constraint_name
+		  AND tc.table_schema = kcu.table_schema
+		JOIN information_schema.constraint_column_usage ccu
+		  ON tc.constraint_name = ccu.constraint_name
+		  AND tc.table_schema = ccu.table_schema
+		WHERE tc.table_schema = $1
+		  AND tc.table_name = $2
+		  AND tc.constraint_type = 'FOREIGN KEY'
+		ORDER BY tc.constraint_name`
+	return d.executeQuery(ctx, query, schema, table)
+}
+
+// TableReferencedBy returns FK constraints from other tables referencing this table.
+func (d *DB) TableReferencedBy(ctx context.Context, schema, table string) (*QueryResult, error) {
+	if schema == "" {
+		schema = "public"
+	}
+	query := `
+		SELECT tc.table_name AS referencing_table,
+		       kcu.column_name AS referencing_column,
+		       tc.constraint_name,
+		       ccu.column_name AS referenced_column
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+		  ON tc.constraint_name = kcu.constraint_name
+		  AND tc.table_schema = kcu.table_schema
+		JOIN information_schema.constraint_column_usage ccu
+		  ON tc.constraint_name = ccu.constraint_name
+		  AND tc.table_schema = ccu.table_schema
+		WHERE tc.table_schema = $1
+		  AND ccu.table_name = $2
+		  AND tc.constraint_type = 'FOREIGN KEY'
+		ORDER BY tc.table_name`
 	return d.executeQuery(ctx, query, schema, table)
 }
 

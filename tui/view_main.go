@@ -32,6 +32,12 @@ const (
 	inputModeSQL
 )
 
+// rightMode determines what the right results pane shows.
+const (
+	rightModeData = iota
+	rightModeDescribe
+)
+
 type MainView struct {
 	db       *db.DB
 	vars     *db.Variables
@@ -57,6 +63,9 @@ type MainView struct {
 	pagPage     int    // current page (0-based)
 	pagPageSize int    // rows per page
 	pagTotal    int64  // total rows in table
+
+	// Right pane mode
+	rightMode int // rightModeData or rightModeDescribe
 
 	// Chat mode state
 	inputMode    int // inputModeChat or inputModeSQL
@@ -95,7 +104,8 @@ func (v *MainView) ShortHelp() []KeyBinding {
 		return []KeyBinding{
 			toggle,
 			{Key: "↑/↓", Desc: "navigate"},
-			{Key: "Enter", Desc: "select table"},
+			{Key: "Enter", Desc: "data"},
+			{Key: "d", Desc: "describe"},
 			{Key: "Tab", Desc: "focus results"},
 		}
 	} else if v.focus == focusResults {
@@ -151,8 +161,38 @@ func (v *MainView) Update(msg tea.Msg) (View, tea.Cmd) {
 				lines = append([]string{msg.PagInfo, ""}, lines...)
 			}
 			v.viewport.SetContentLines(lines)
+			v.rightMode = rightModeData
 		} else if msg.Err != nil {
 			v.viewport.SetContent("ERROR: " + msg.Err.Error())
+		}
+		return v, nil
+
+	case DescribeResultMsg:
+		v.loading = false
+		if msg.Err != nil {
+			v.viewport.SetContent("ERROR: " + msg.Err.Error())
+		} else if msg.Result != nil {
+			lines := []string{msg.Header, ""}
+			// Columns
+			lines = append(lines, "── Columns ──")
+			lines = append(lines, v.formatResult(msg.Result)...)
+			// Indexes
+			if msg.Indexes != nil && msg.Indexes.RowCount > 0 {
+				lines = append(lines, "", "── Indexes ──")
+				lines = append(lines, v.formatResult(msg.Indexes)...)
+			}
+			// Foreign Keys
+			if msg.ForeignKeys != nil && msg.ForeignKeys.RowCount > 0 {
+				lines = append(lines, "", "── Foreign Keys ──")
+				lines = append(lines, v.formatResult(msg.ForeignKeys)...)
+			}
+			// Referenced By
+			if msg.ReferencedBy != nil && msg.ReferencedBy.RowCount > 0 {
+				lines = append(lines, "", "── Referenced By ──")
+				lines = append(lines, v.formatResult(msg.ReferencedBy)...)
+			}
+			v.viewport.SetContentLines(lines)
+			v.rightMode = rightModeDescribe
 		}
 		return v, nil
 
@@ -272,13 +312,18 @@ func (v *MainView) handleSidebarKey(msg tea.KeyMsg) (View, tea.Cmd) {
 			v.pagTable = selected
 			v.pagPage = 0
 			v.pagPageSize = 20
-			// Use estimated row count from sidebar
 			if v.tableIdx < len(v.tableRows) {
 				v.pagTotal = v.tableRows[v.tableIdx]
 			} else {
 				v.pagTotal = 0
 			}
 			return v, v.fetchPage()
+		}
+	case "d":
+		if len(v.tables) > 0 {
+			selected := v.tables[v.tableIdx]
+			v.pagTable = ""
+			return v, v.fetchDescribe(selected)
 		}
 	}
 	return v, nil
@@ -431,6 +476,40 @@ func maxPageCalc(total int64, pageSize int64) int64 {
 		return 0
 	}
 	return (total - 1) / pageSize
+}
+
+// fetchDescribe queries the table schema and returns a DescribeResultMsg.
+func (v *MainView) fetchDescribe(table string) tea.Cmd {
+	v.loading = true
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Get table size info
+		var totalSize, tableSize, indexSize string
+		var rowCount int64
+		sizeSQL := `SELECT pg_size_pretty(pg_total_relation_size($1)),
+		                   pg_size_pretty(pg_relation_size($1)),
+		                   pg_size_pretty(pg_indexes_size($1))`
+		_ = v.db.Pool.QueryRow(ctx, sizeSQL, table).Scan(&totalSize, &tableSize, &indexSize)
+		_ = v.db.Pool.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", table)).Scan(&rowCount)
+
+		header := fmt.Sprintf("📋 %s  |  Total: %s  |  Table: %s  |  Indexes: %s  |  %d rows",
+			table, totalSize, tableSize, indexSize, rowCount)
+
+		result, err := v.db.DescribeTable(ctx, "public", table)
+		if err != nil {
+			return DescribeResultMsg{Err: err, Header: header}
+		}
+		indexes, _ := v.db.TableIndexes(ctx, "public", table)
+		fks, _ := v.db.TableForeignKeys(ctx, "public", table)
+		refs, _ := v.db.TableReferencedBy(ctx, "public", table)
+
+		return DescribeResultMsg{
+			Result: result, Indexes: indexes,
+			ForeignKeys: fks, ReferencedBy: refs,
+			Header: header,
+		}
+	}
 }
 
 func (v *MainView) handleMetaCommand(cmd string) tea.Cmd {
