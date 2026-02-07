@@ -7,8 +7,6 @@ package tui
 import (
 	"strings"
 	"unicode/utf8"
-
-	"github.com/charmbracelet/lipgloss"
 )
 
 // Viewport is a scrollable text area with pagination.
@@ -124,11 +122,7 @@ func (v *Viewport) Render() string {
 		visibleLines = append(visibleLines, "")
 	}
 
-	// Add scroll indicator
-	indicator := v.scrollIndicator()
-
-	content := strings.Join(visibleLines, "\n")
-	return lipgloss.JoinVertical(lipgloss.Left, content, indicator)
+	return strings.Join(visibleLines, "\n")
 }
 
 // renderScrolled returns lines with horizontal offset applied.
@@ -214,39 +208,4 @@ func (v *Viewport) maxScrollY() int {
 		return 0
 	}
 	return max
-}
-
-func (v *Viewport) scrollIndicator() string {
-	if len(v.content) <= v.height {
-		return ""
-	}
-
-	total := len(v.content)
-	pos := v.scrollY
-	pct := 0
-	if total > 0 {
-		pct = (pos * 100) / total
-	}
-
-	indicator := StyleDimmed.Render(
-		strings.Repeat("─", v.width-20) +
-			" " + itoa2(pct) + "% " +
-			"(" + itoa2(pos+1) + "/" + itoa2(total) + ")")
-
-	return indicator
-}
-
-func itoa2(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	if n < 0 {
-		return "-" + itoa2(-n)
-	}
-	s := ""
-	for n > 0 {
-		s = string(rune('0'+n%10)) + s
-		n /= 10
-	}
-	return s
 }

@@ -52,6 +52,12 @@ type SQLView struct {
 	focus     int
 	tableErr  error
 
+	// Pagination state
+	pagTable    string // current paginated table name
+	pagPage     int    // current page (0-based)
+	pagPageSize int    // rows per page
+	pagTotal    int64  // total rows in table
+
 	// Chat mode state
 	inputMode    int // inputModeChat or inputModeSQL
 	aiProvider   ai.Provider
@@ -95,7 +101,8 @@ func (v *SQLView) ShortHelp() []KeyBinding {
 	} else if v.focus == focusResults {
 		return []KeyBinding{
 			toggle,
-			{Key: "↑/↓/PgUp/PgDn", Desc: "scroll"},
+			{Key: "↑/↓", Desc: "scroll"},
+			{Key: "←/→", Desc: "pan"},
 			{Key: "Tab", Desc: "focus input"},
 		}
 	}
@@ -135,10 +142,17 @@ func (v *SQLView) Update(msg tea.Msg) (View, tea.Cmd) {
 		v.loading = false
 		v.err = msg.Err
 		v.result = msg.Result
+		if msg.PagTotal > 0 {
+			v.pagTotal = msg.PagTotal
+		}
 		if msg.Result != nil {
-			v.viewport.SetContentLines(v.formatResult(msg.Result))
+			lines := v.formatResult(msg.Result)
+			if msg.PagInfo != "" {
+				lines = append([]string{msg.PagInfo, ""}, lines...)
+			}
+			v.viewport.SetContentLines(lines)
 		} else if msg.Err != nil {
-			v.viewport.SetContent(StyleError.Render("ERROR: " + msg.Err.Error()))
+			v.viewport.SetContent("ERROR: " + msg.Err.Error())
 		}
 		return v, nil
 
@@ -255,10 +269,16 @@ func (v *SQLView) handleSidebarKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	case "enter":
 		if len(v.tables) > 0 {
 			selected := v.tables[v.tableIdx]
-			v.input = fmt.Sprintf("SELECT * FROM %s LIMIT 20;", selected)
-			cmd := v.execute()
-			// v.focus = focusResults // Keep focus in sidebar
-			return v, cmd
+			v.pagTable = selected
+			v.pagPage = 0
+			v.pagPageSize = 20
+			// Use estimated row count from sidebar
+			if v.tableIdx < len(v.tableRows) {
+				v.pagTotal = v.tableRows[v.tableIdx]
+			} else {
+				v.pagTotal = 0
+			}
+			return v, v.fetchPage()
 		}
 	}
 	return v, nil
@@ -270,18 +290,39 @@ func (v *SQLView) handleResultsKey(msg tea.KeyMsg) (View, tea.Cmd) {
 		v.viewport.ScrollUp(1)
 	case "down", "j":
 		v.viewport.ScrollDown(1)
+	case "left", "h":
+		v.viewport.ScrollLeft(4)
+	case "right", "l":
+		v.viewport.ScrollRight(4)
 	case "pgup":
-		v.viewport.PageUp()
+		if v.pagTable != "" {
+			// Database-level pagination: previous page
+			if v.pagPage > 0 {
+				v.pagPage--
+				return v, v.fetchPage()
+			}
+		} else {
+			v.viewport.PageUp()
+		}
 	case "pgdown":
-		v.viewport.PageDown()
+		if v.pagTable != "" {
+			// Database-level pagination: next page
+			maxPage := v.maxPage()
+			if v.pagPage < maxPage {
+				v.pagPage++
+				return v, v.fetchPage()
+			}
+		} else {
+			v.viewport.PageDown()
+		}
 	case "home":
 		v.viewport.Home()
 	case "end":
 		v.viewport.End()
 	case "ctrl+h":
-		v.viewport.ScrollLeft(4)
+		v.viewport.ScrollLeft(20)
 	case "ctrl+l":
-		v.viewport.ScrollRight(4)
+		v.viewport.ScrollRight(20)
 	case "w": // wrap toggle
 		v.viewport.ToggleWrap()
 	}
@@ -326,6 +367,7 @@ func (v *SQLView) execute() tea.Cmd {
 	}
 	v.history = append([]string{input}, v.history...)
 	v.histIdx = -1
+	v.pagTable = "" // clear pagination for manual queries
 	if strings.HasPrefix(input, "\\") {
 		return v.handleMetaCommand(input)
 	}
@@ -336,6 +378,59 @@ func (v *SQLView) execute() tea.Cmd {
 		result, err := v.db.Execute(context.Background(), sql)
 		return QueryResultMsg{Result: result, Err: err}
 	}
+}
+
+// fetchPage runs a paginated SELECT for the current table.
+func (v *SQLView) fetchPage() tea.Cmd {
+	table := v.pagTable
+	page := v.pagPage
+	pageSize := v.pagPageSize
+	v.loading = true
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Get real row count
+		var total int64
+		countSQL := fmt.Sprintf("SELECT count(*) FROM %s", table)
+		_ = v.db.Pool.QueryRow(ctx, countSQL).Scan(&total)
+
+		// Get table size info
+		var totalSize, tableSize, indexSize string
+		sizeSQL := `SELECT pg_size_pretty(pg_total_relation_size($1)),
+		                   pg_size_pretty(pg_relation_size($1)),
+		                   pg_size_pretty(pg_indexes_size($1))`
+		_ = v.db.Pool.QueryRow(ctx, sizeSQL, table).Scan(&totalSize, &tableSize, &indexSize)
+
+		info := fmt.Sprintf("📊 %s  |  Total: %s  |  Table: %s  |  Indexes: %s  |  %d rows",
+			table, totalSize, tableSize, indexSize, total)
+
+		offset := page * pageSize
+		sql := fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET %d", table, pageSize, offset)
+		result, err := v.db.Execute(ctx, sql)
+		if result != nil {
+			lastRow := offset + result.RowCount
+			totalPages := maxPageCalc(total, int64(pageSize)) + 1
+			result.Status = fmt.Sprintf("Page %d/%d  |  Rows %d–%d of %d",
+				page+1, totalPages,
+				offset+1, lastRow,
+				total)
+		}
+		return QueryResultMsg{Result: result, Err: err, PagTotal: total, PagInfo: info}
+	}
+}
+
+func (v *SQLView) maxPage() int {
+	if v.pagTotal <= 0 || v.pagPageSize <= 0 {
+		return 0
+	}
+	return int((v.pagTotal - 1) / int64(v.pagPageSize))
+}
+
+func maxPageCalc(total int64, pageSize int64) int64 {
+	if total <= 0 || pageSize <= 0 {
+		return 0
+	}
+	return (total - 1) / pageSize
 }
 
 func (v *SQLView) handleMetaCommand(cmd string) tea.Cmd {

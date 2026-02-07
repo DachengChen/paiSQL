@@ -8,8 +8,10 @@ import "github.com/DachengChen/paiSQL/db"
 
 // QueryResultMsg is sent when a SQL query completes.
 type QueryResultMsg struct {
-	Result *db.QueryResult
-	Err    error
+	Result   *db.QueryResult
+	Err      error
+	PagTotal int64  // total rows for pagination (0 = not paginated)
+	PagInfo  string // table info header (name, size, etc.)
 }
 
 // ExplainResultMsg is sent when an EXPLAIN query completes.
