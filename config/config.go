@@ -4,7 +4,9 @@
 // depend on config without importing Cobra.
 package config
 
-// Config holds all application settings.
+import "strconv"
+
+// Config holds all application settings for an active connection.
 type Config struct {
 	Host     string
 	Port     int
@@ -27,26 +29,40 @@ type SSHConfig struct {
 }
 
 // DSN builds a pgx-compatible connection string.
-// When SSH tunnel is active, the caller should override Host/Port
-// with the local tunnel endpoint.
 func (c Config) DSN() string {
 	return "host=" + c.Host +
-		" port=" + itoa(c.Port) +
+		" port=" + strconv.Itoa(c.Port) +
 		" user=" + c.User +
 		" password=" + c.Password +
 		" dbname=" + c.Database +
 		" sslmode=" + c.SSLMode
 }
 
-// itoa is a simple int-to-string without importing strconv at top-level.
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
+// FromConnection converts a saved Connection profile into a Config.
+func FromConnection(conn Connection) Config {
+	port, _ := strconv.Atoi(conn.Port)
+	if port == 0 {
+		port = 5432
 	}
-	s := ""
-	for i > 0 {
-		s = string(rune('0'+i%10)) + s
-		i /= 10
+	sshPort, _ := strconv.Atoi(conn.SSH.Port)
+	if sshPort == 0 {
+		sshPort = 22
 	}
-	return s
+
+	return Config{
+		Host:     conn.Host,
+		Port:     port,
+		User:     conn.User,
+		Password: conn.Password,
+		Database: conn.Database,
+		SSLMode:  conn.SSLMode,
+		SSH: SSHConfig{
+			Enabled:       conn.SSH.Enabled,
+			Host:          conn.SSH.Host,
+			Port:          sshPort,
+			User:          conn.SSH.User,
+			KeyPath:       conn.SSH.KeyPath,
+			KeyPassphrase: conn.SSH.KeyPassphrase,
+		},
+	}
 }

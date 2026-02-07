@@ -2,40 +2,31 @@
 //
 // Architecture:
 //   - App is the top-level model that owns all views.
-//   - Each view (SQL, Explain, Stats, Log, AI, Index) is a sub-model
-//     that implements the View interface.
-//   - Tab switching, command mode, and help overlay are handled at
-//     the App level.
+//   - On startup, the App shows the ConnectView for connection setup.
+//   - After successful connection, it switches to the main multi-tab view.
 //   - Database queries run asynchronously via tea.Cmd, never blocking
 //     the UI event loop.
 package tui
 
 import (
-	"context"
 	"fmt"
 
-	"github.com/DachengChen/paiSQL/ai"
 	"github.com/DachengChen/paiSQL/config"
-	"github.com/DachengChen/paiSQL/db"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Start initializes the database connection and launches the TUI.
-func Start(cfg config.Config) error {
-	ctx := context.Background()
-
-	// Connect to PostgreSQL
-	database, err := db.Connect(ctx, cfg)
+// Start initializes the connection store and launches the TUI.
+// No database connection is needed upfront — the user configures
+// it in the connection screen.
+func Start() error {
+	// Load saved connections
+	store, err := config.NewConnectionStore()
 	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
+		return fmt.Errorf("failed to load connections: %w", err)
 	}
-	defer database.Close()
 
-	// Initialize AI provider (placeholder for now)
-	aiProvider := ai.NewPlaceholder()
-
-	// Create and run the TUI
-	app := NewApp(database, aiProvider, cfg)
+	// Create and run the TUI (starts with connection screen)
+	app := NewApp(store)
 	p := tea.NewProgram(app, tea.WithAltScreen())
 
 	_, err = p.Run()

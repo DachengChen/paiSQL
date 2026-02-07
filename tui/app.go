@@ -1,12 +1,16 @@
 // app.go is the top-level Bubble Tea model that orchestrates all views.
 //
+// Flow:
+//  1. Start with ConnectView (connection form)
+//  2. On successful connection → switch to main multi-tab view
+//  3. User can disconnect and return to connection screen
+//
 // Key design decisions:
-//   - Tab-based navigation between views.
-//   - Command mode (`:`) for psql-like commands.
-//   - Jump mode (`/`) for quick view switching.
-//   - Help overlay (`?`) toggled on/off.
-//   - Window resize propagated to all views.
-//   - The App itself does NOT run queries — it delegates to views.
+//   - Two phases: "connecting" and "connected"
+//   - Tab-based navigation between views (when connected)
+//   - Command mode (`:`) for psql-like commands
+//   - Jump mode (`/`) for quick view switching
+//   - Help overlay (`?`) toggled on/off
 package tui
 
 import (
@@ -19,7 +23,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Tab indices (order matters for Tab key cycling).
+// Tab indices for connected mode.
 const (
 	TabSQL = iota
 	TabExplain
@@ -29,58 +33,59 @@ const (
 	TabAI
 )
 
-// InputMode determines what keystrokes do.
+// AppPhase tracks whether we're connecting or already connected.
+type AppPhase int
+
+const (
+	PhaseConnect AppPhase = iota
+	PhaseMain
+)
+
+// InputMode determines what keystrokes do in main phase.
 type InputMode int
 
 const (
-	ModeNormal  InputMode = iota
-	ModeCommand           // `:` prefix — entering a psql-like command
-	ModeJump              // `/` prefix — jump to view by name
+	ModeNormal InputMode = iota
+	ModeCommand
+	ModeJump
 )
 
 // App is the root Bubble Tea model.
 type App struct {
+	// Phase management
+	phase       AppPhase
+	connectView *ConnectView
+	store       *config.ConnectionStore
+
+	// Connected state
 	views      []View
 	activeTab  int
-	width      int
-	height     int
-	mode       InputMode
-	cmdInput   string // current `:` or `/` input buffer
-	showHelp   bool
-	statusMsg  string // transient message in status bar
 	db         *db.DB
 	aiProvider ai.Provider
 	cfg        config.Config
+	connName   string // name of active connection
+
+	// UI state
+	width     int
+	height    int
+	mode      InputMode
+	cmdInput  string
+	showHelp  bool
+	statusMsg string
 }
 
-// NewApp creates the application with all views.
-func NewApp(database *db.DB, aiProvider ai.Provider, cfg config.Config) *App {
-	app := &App{
-		db:         database,
-		aiProvider: aiProvider,
-		cfg:        cfg,
+// NewApp creates the application starting with the connection screen.
+func NewApp(store *config.ConnectionStore) *App {
+	return &App{
+		phase:       PhaseConnect,
+		connectView: NewConnectView(store),
+		store:       store,
 	}
-
-	// Register views in tab order.
-	app.views = []View{
-		NewSQLView(database),
-		NewExplainView(database),
-		NewIndexView(database, aiProvider),
-		NewStatsView(database),
-		NewLogView(database),
-		NewAIView(aiProvider),
-	}
-
-	return app
 }
 
 // Init implements tea.Model.
 func (a *App) Init() tea.Cmd {
-	// Initialize the active view
-	if len(a.views) > 0 {
-		return a.views[a.activeTab].Init()
-	}
-	return nil
+	return a.connectView.Init()
 }
 
 // Update implements tea.Model.
@@ -89,13 +94,59 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
-		// Reserve space for tab bar (1) + status bar (1) + help bar (1)
+		if a.phase == PhaseConnect {
+			a.connectView.SetSize(a.width, a.height-1)
+		} else {
+			contentHeight := a.height - 3
+			for _, v := range a.views {
+				v.SetSize(a.width, contentHeight)
+			}
+		}
+		return a, nil
+
+	case ConnectedMsg:
+		// Transition from connect → main phase
+		a.db = msg.DB
+		a.cfg = msg.Cfg
+		a.connName = msg.Conn.Name
+		a.phase = PhaseMain
+		a.aiProvider = ai.NewPlaceholder()
+		a.initViews()
+		// Trigger resize for views
 		contentHeight := a.height - 3
 		for _, v := range a.views {
 			v.SetSize(a.width, contentHeight)
 		}
-		return a, nil
+		return a, a.views[a.activeTab].Init()
 
+	case ConnectErrorMsg:
+		// Stay on connect screen, forward error
+		updated, cmd := a.connectView.Update(msg)
+		a.connectView = updated.(*ConnectView)
+		return a, cmd
+	}
+
+	if a.phase == PhaseConnect {
+		return a.updateConnect(msg)
+	}
+	return a.updateMain(msg)
+}
+
+func (a *App) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			return a, tea.Quit
+		}
+	}
+
+	updated, cmd := a.connectView.Update(msg)
+	a.connectView = updated.(*ConnectView)
+	return a, cmd
+}
+
+func (a *App) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return a.handleKey(msg)
 	}
@@ -110,7 +161,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// handleKey processes keyboard input based on current mode.
+// initViews creates all main views after connection is established.
+func (a *App) initViews() {
+	a.views = []View{
+		NewSQLView(a.db),
+		NewExplainView(a.db),
+		NewIndexView(a.db, a.aiProvider),
+		NewStatsView(a.db),
+		NewLogView(a.db),
+		NewAIView(a.aiProvider),
+	}
+	a.activeTab = 0
+}
+
+// handleKey processes keyboard input in main phase.
 func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch a.mode {
 	case ModeCommand:
@@ -251,6 +315,9 @@ func (a *App) executeCommand(input string) tea.Cmd {
 	switch {
 	case input == "q" || input == "quit":
 		return tea.Quit
+	case input == "disconnect":
+		a.disconnect()
+		return nil
 	case strings.HasPrefix(input, "dt"):
 		a.activeTab = TabSQL
 		a.statusMsg = "listing tables..."
@@ -261,10 +328,27 @@ func (a *App) executeCommand(input string) tea.Cmd {
 	}
 }
 
+func (a *App) disconnect() {
+	if a.db != nil {
+		a.db.Close()
+		a.db = nil
+	}
+	a.phase = PhaseConnect
+	a.views = nil
+	a.activeTab = 0
+	a.statusMsg = ""
+}
+
 // View implements tea.Model.
 func (a *App) View() string {
 	if a.width == 0 {
 		return "loading..."
+	}
+
+	if a.phase == PhaseConnect {
+		content := a.connectView.View()
+		helpBar := a.renderConnectHelpBar()
+		return lipgloss.JoinVertical(lipgloss.Left, content, helpBar)
 	}
 
 	var sections []string
@@ -285,6 +369,16 @@ func (a *App) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
+func (a *App) renderConnectHelpBar() string {
+	help := a.connectView.ShortHelp()
+	var parts []string
+	for _, h := range help {
+		parts = append(parts,
+			StyleHelpKey.Render(h.Key)+" "+StyleHelpDesc.Render(h.Desc))
+	}
+	return StyleStatusBar.Width(a.width).Render(strings.Join(parts, "  │  "))
+}
+
 func (a *App) renderTabBar() string {
 	var tabs []string
 	for i, v := range a.views {
@@ -295,7 +389,17 @@ func (a *App) renderTabBar() string {
 			tabs = append(tabs, StyleTabInactive.Render(label))
 		}
 	}
+
+	// Connection indicator
+	connLabel := " ⚡ " + a.connName
+	if a.connName == "" {
+		connLabel = " ⚡ connected"
+	}
+	connIndicator := lipgloss.NewStyle().Foreground(ColorSuccess).Render(connLabel)
+
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	tabBar += "  " + connIndicator
+
 	return lipgloss.NewStyle().Width(a.width).Background(ColorBgAlt).Render(tabBar)
 }
 
@@ -311,7 +415,6 @@ func (a *App) renderStatusBar() string {
 		if a.statusMsg != "" {
 			content = a.statusMsg
 		} else {
-			// Show context-aware help keys
 			helpItems := a.getHelpItems()
 			var parts []string
 			for _, h := range helpItems {
@@ -346,7 +449,7 @@ func (a *App) renderHelp() string {
 		"",
 		StyleHelpKey.Render("Tab / Shift+Tab") + "  Switch between views",
 		StyleHelpKey.Render("1-6") + "              Jump to view by number",
-		StyleHelpKey.Render(":") + "                Command mode (e.g. :dt, :quit)",
+		StyleHelpKey.Render(":") + "                Command mode (e.g. :dt, :quit, :disconnect)",
 		StyleHelpKey.Render("/") + "                Jump to view by name",
 		StyleHelpKey.Render("?") + "                Toggle this help",
 		StyleHelpKey.Render("q / Ctrl+C") + "       Quit",
@@ -358,6 +461,12 @@ func (a *App) renderHelp() string {
 		StyleHelpKey.Render("PgUp/PgDn") + "        Page up/down",
 		StyleHelpKey.Render("Enter") + "            Execute query (SQL view)",
 		StyleHelpKey.Render("Ctrl+E") + "           Explain query",
+		"",
+		StyleTitle.Render("Commands"),
+		"",
+		StyleHelpKey.Render(":disconnect") + "      Return to connection screen",
+		StyleHelpKey.Render(":dt") + "              List tables",
+		StyleHelpKey.Render(":quit") + "            Quit",
 		"",
 		StyleDimmed.Render("Press ? to close"),
 	}

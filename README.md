@@ -5,36 +5,46 @@ PostgreSQL CLI with TUI and AI assistant — featuring multi-view navigation, ta
 ## Features
 
 - **pgx-based** — connects directly to PostgreSQL via pgx (no `psql` dependency)
+- **TUI connection manager** — configure, save, and select database connections in the TUI
 - **SSH tunnel** — optional local port forwarding for remote databases
 - **6 TUI views** — SQL, Explain, Index, Stats, Log, AI
 - **psql-like commands** — `\dt`, `\di`, `\dv`, `\d <table>`, `\set`
 - **Async queries** — database and AI operations never block the UI
-- **Variable substitution** — set and use variables in queries
 - **Keyboard-driven** — tab switching, command mode, jump mode, help overlay
 
 ## Quick Start
 
 ```bash
 # Build
-go build -o bin/paiSQL .
+go build -o bin/paisql .
 
-# Connect to local PostgreSQL
-./bin/paiSQL -H localhost -p 5432 -U docker -d ports -W docker
+# Start the TUI (opens connection setup screen)
+./bin/paisql
 
-# Connect via SSH tunnel
-./bin/paiSQL \
-  --ssh --ssh-host bastion.example.com --ssh-user deploy \
-  --ssh-key ~/.ssh/id_rsa \
-  -H db-internal -p 5432 -U myuser -d mydb
+# Or use air for auto-reload during development
+air
 ```
 
 ## Keyboard Shortcuts
+
+### Connection Screen
+
+| Key | Action |
+|---|---|
+| `↑/↓` | Navigate fields |
+| `Enter` | Edit field / toggle / action |
+| `Esc` | Stop editing |
+| `←/→` | Switch saved connection / cycle SSL mode |
+| `Tab` | Jump to Connect button |
+| `Ctrl+C` | Quit |
+
+### Main View
 
 | Key | Action |
 |---|---|
 | `Tab` / `Shift+Tab` | Switch between views |
 | `1-6` | Jump to view by number |
-| `:` | Command mode |
+| `:` | Command mode (`:dt`, `:quit`, `:disconnect`) |
 | `/` | Jump to view by name |
 | `?` | Toggle help overlay |
 | `Enter` | Execute query |
@@ -49,9 +59,10 @@ go build -o bin/paiSQL .
 ```
 ├── main.go          # Entry point
 ├── cmd/             # Cobra CLI commands
-│   └── root.go      # Root command with DB/SSH flags
-├── config/          # Shared configuration structs
-│   └── config.go
+│   └── root.go      # Root command → launches TUI
+├── config/          # Configuration & saved connections
+│   ├── config.go       # Runtime config structs
+│   └── connections.go  # Saved connections (~/.paisql/connections.json)
 ├── db/              # pgx connection and queries
 │   ├── connection.go   # Connection pool + SSH tunnel integration
 │   ├── query.go        # psql-like meta-commands + SQL execution
@@ -63,8 +74,9 @@ go build -o bin/paiSQL .
 │   └── placeholder.go  # Mock provider for development
 └── tui/             # Bubble Tea terminal UI
     ├── tui.go          # TUI entry point
-    ├── app.go          # Root model (tabs, command mode, help)
+    ├── app.go          # Root model (phases, tabs, commands)
     ├── view.go         # View interface
+    ├── view_connect.go # Connection setup form
     ├── viewport.go     # Scrollable viewport component
     ├── styles.go       # Color palette and shared styles
     ├── messages.go     # Async message types
@@ -76,18 +88,6 @@ go build -o bin/paiSQL .
     └── view_ai.go      # AI assistant chat view
 ```
 
-## Configuration
+## Saved Connections
 
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--host` | `-H` | `localhost` | PostgreSQL host |
-| `--port` | `-p` | `5432` | PostgreSQL port |
-| `--user` | `-U` | `postgres` | PostgreSQL user |
-| `--password` | `-W` | | PostgreSQL password |
-| `--dbname` | `-d` | `postgres` | Database name |
-| `--sslmode` | | `prefer` | SSL mode |
-| `--ssh` | | `false` | Enable SSH tunnel |
-| `--ssh-host` | | | SSH server host |
-| `--ssh-port` | | `22` | SSH server port |
-| `--ssh-user` | | | SSH user |
-| `--ssh-key` | | | Path to SSH private key |
+Connections are saved to `~/.paisql/connections.json`. You can save, load, and delete connections directly from the TUI connection screen.

@@ -3,9 +3,9 @@ tmp_dir = "bin/tmp"
 
 [build]
   # Build command
-  cmd = "go build -o bin/paiSQL ."
+  cmd = "go build -o bin/paisql ."
   # Binary to run
-  bin = "bin/paiSQL -H localhost -p 5432 -U docker -d ports -W docker --sslmode disable"
+  bin = "bin/paisql"
   # Watch these extensions
   include_ext = ["go"]
   # Exclude directories
