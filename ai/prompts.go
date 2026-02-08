@@ -88,11 +88,19 @@ Example:
 
 ## Select columns
 
-- If the user does NOT explicitly ask to show/display only specific columns, set "select": ["*"]
-- ONLY narrow the select list when the user explicitly says things like:
-  "show only id and name", "display just the email", "list the name column"
-- Mentioning a column in a sort, filter, or condition does NOT mean the user wants only that column.
-  For example: "sort by id" → select ALL columns, just sort by id.
+- DEFAULT is always "select": ["*"] (all columns)
+- ONLY narrow the select list when the user EXPLICITLY asks to display specific columns using words like:
+  "show only", "display just", "select only", "return only", "columns: X, Y"
+- DO NOT narrow the select based on:
+  - Words that describe WHAT to find: "list company id in china" → this means "find companies in china", NOT "show only the id column"
+  - Column names mentioned in sort/filter context: "sort by id", "where name is X" → keep ["*"]
+  - General nouns in the question: "company", "address", "user" → these describe the subject, not columns to display
+
+Examples:
+  - "list company id in china" → select: ["*"], filter: country china (user is describing what to look for)
+  - "sort by id" → select: ["*"]
+  - "show only name and email" → select: ["name", "email"] (user explicitly says "show only")
+  - "what are the names" → select: ["*"] (ambiguous, default to all)
 
 ## Output format
 
