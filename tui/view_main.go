@@ -80,6 +80,10 @@ type MainView struct {
 	planSortCol   string // saved sort column from last plan
 	planSortOrder string // saved sort order from last plan
 
+	// Modification query workflow
+	pendingSQL    string // SQL from a modification plan, waiting to be pasted
+	inTransaction bool   // true after BEGIN is executed
+
 	// Fullscreen toggle (F5) — hides sidebar for clean text selection
 	fullscreen bool
 }
@@ -178,10 +182,20 @@ func (v *MainView) Update(msg tea.Msg) (View, tea.Cmd) {
 			if msg.PagInfo != "" {
 				lines = append([]string{msg.PagInfo, ""}, lines...)
 			}
+			// Show transaction reminder after modification queries
+			if v.inTransaction {
+				lines = append(lines, "", "─────────────────────────────────────",
+					"⚠️  IN TRANSACTION — type COMMIT; to save or ROLLBACK; to undo")
+			}
 			v.viewport.SetContentLines(lines)
 			v.rightMode = rightModeData
 		} else if msg.Err != nil {
-			v.viewport.SetContent("ERROR: " + msg.Err.Error())
+			errLines := []string{"ERROR: " + msg.Err.Error()}
+			if v.inTransaction {
+				errLines = append(errLines, "", "─────────────────────────────────────",
+					"⚠️  IN TRANSACTION — type ROLLBACK; to undo or fix and retry")
+			}
+			v.viewport.SetContentLines(errLines)
 		}
 		return v, nil
 
@@ -299,18 +313,21 @@ func (v *MainView) Update(msg tea.Msg) (View, tea.Cmd) {
 			return v, v.fetchQueryPlanPage(plan, msg.SQL)
 		}
 
-		// Modification: show SQL for review, don't auto-execute
+		// Modification: show SQL for review on one line with ; for easy copy
+		oneLine := strings.Join(strings.Fields(msg.SQL), " ") + ";"
+
 		var reviewLines []string
 		reviewLines = append(reviewLines, "⚠️  Modification Query — Review before executing")
 		reviewLines = append(reviewLines, "")
 		reviewLines = append(reviewLines, "📝 "+plan.Summary())
 		reviewLines = append(reviewLines, "")
-		reviewLines = append(reviewLines, "Generated SQL:")
-		reviewLines = append(reviewLines, "```")
-		reviewLines = append(reviewLines, msg.SQL)
-		reviewLines = append(reviewLines, "```")
+		reviewLines = append(reviewLines, "SQL (copy this):")
+		reviewLines = append(reviewLines, oneLine)
 		reviewLines = append(reviewLines, "")
-		reviewLines = append(reviewLines, "Copy the SQL above and execute manually with SQL> prompt (F2 to switch).")
+		reviewLines = append(reviewLines, "Press F2 to switch to SQL view — a transaction will be started automatically.")
+
+		// Store the pending SQL for auto-injection when switching to SQL view
+		v.pendingSQL = oneLine
 
 		v.chatMessages = append(v.chatMessages, ai.Message{
 			Role:    "assistant",
@@ -331,6 +348,19 @@ func (v *MainView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 			v.inputMode = inputModeChat
 		} else {
 			v.inputMode = inputModeSQL
+			// If there's a pending modification SQL, auto-start a transaction
+			if v.pendingSQL != "" {
+				v.input = v.pendingSQL
+				v.pendingSQL = ""
+				// Auto-execute BEGIN
+				v.inTransaction = true
+				v.loading = true
+				v.focus = focusInput
+				return v, func() tea.Msg {
+					result, err := v.db.Execute(context.Background(), "BEGIN")
+					return QueryResultMsg{Result: result, Err: err}
+				}
+			}
 		}
 		v.focus = focusInput
 		return v, nil
@@ -535,9 +565,21 @@ func (v *MainView) execute() tea.Cmd {
 	if input == "" {
 		return nil
 	}
+	// Strip trailing semicolons for command matching
+	cleanInput := strings.TrimRight(input, "; ")
+
 	v.history = append([]string{input}, v.history...)
 	v.histIdx = -1
 	v.pagTable = "" // clear pagination for manual queries
+
+	// Track transaction state
+	upper := strings.ToUpper(cleanInput)
+	if upper == "BEGIN" || upper == "START TRANSACTION" {
+		v.inTransaction = true
+	} else if upper == "COMMIT" || upper == "ROLLBACK" {
+		v.inTransaction = false
+	}
+
 	if strings.HasPrefix(input, "\\") {
 		return v.handleMetaCommand(input)
 	}
@@ -1144,7 +1186,11 @@ func (v *MainView) View() string {
 				label = "Ask> "
 				txt = v.chatInput
 			} else {
-				label = "SQL> "
+				if v.inTransaction {
+					label = "TXN> "
+				} else {
+					label = "SQL> "
+				}
 				txt = v.input
 			}
 			content := StylePrompt.Render(label) + txt + "█"
@@ -1230,7 +1276,11 @@ func (v *MainView) View() string {
 			promptTxt = StyleDimmed.Render("waiting for response...")
 		}
 	} else {
-		promptLabel = StylePrompt.Render("SQL> ")
+		if v.inTransaction {
+			promptLabel = StylePrompt.Render("TXN> ")
+		} else {
+			promptLabel = StylePrompt.Render("SQL> ")
+		}
 		promptTxt = v.input
 		if v.focus == focusInput {
 			promptTxt += "█"
