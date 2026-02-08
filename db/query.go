@@ -268,7 +268,13 @@ func (d *DB) executeQuery(ctx context.Context, sql string, args ...any) (*QueryR
 		return nil, err
 	}
 
-	result.Status = fmt.Sprintf("(%d row%s)", result.RowCount, plural(result.RowCount))
+	// Use the command tag for non-SELECT queries (e.g., "DELETE 1", "UPDATE 3", "BEGIN")
+	cmdTag := rows.CommandTag().String()
+	if len(result.Columns) == 0 && cmdTag != "" {
+		result.Status = cmdTag
+	} else {
+		result.Status = fmt.Sprintf("(%d row%s)", result.RowCount, plural(result.RowCount))
+	}
 	return result, nil
 }
 

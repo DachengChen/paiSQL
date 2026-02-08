@@ -179,7 +179,12 @@ func (p *QueryPlan) toSelectSQL() (string, error) {
 		if order != "DESC" {
 			order = "ASC"
 		}
-		sql += fmt.Sprintf("\nORDER BY %s %s", p.Sort.Column, order)
+		sortCol := p.Sort.Column
+		// Qualify with main table name if there are joins and column isn't already qualified
+		if len(p.Tables) > 1 && !strings.Contains(sortCol, ".") {
+			sortCol = p.Tables[0] + "." + sortCol
+		}
+		sql += fmt.Sprintf("\nORDER BY %s %s", sortCol, order)
 	}
 
 	// LIMIT & OFFSET
