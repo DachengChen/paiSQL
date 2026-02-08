@@ -74,6 +74,9 @@ type MainView struct {
 	chatInput    string
 	chatMessages []ai.Message
 	chatLoading  bool
+
+	// Fullscreen toggle (F5) — hides sidebar for clean text selection
+	fullscreen bool
 }
 
 func NewMainView(database *db.DB, provider ai.Provider) *MainView {
@@ -104,10 +107,12 @@ func (v *MainView) ShortHelp() []KeyBinding {
 		modeLabel = "sql"
 	}
 	toggle := KeyBinding{Key: "F2", Desc: modeLabel}
+	fs := KeyBinding{Key: "F5", Desc: "fullscreen"}
 
 	if v.focus == focusSidebar {
 		return []KeyBinding{
 			toggle,
+			fs,
 			{Key: "↑/↓", Desc: "navigate"},
 			{Key: "Enter", Desc: "data"},
 			{Key: "d", Desc: "describe"},
@@ -116,6 +121,7 @@ func (v *MainView) ShortHelp() []KeyBinding {
 	} else if v.focus == focusResults {
 		return []KeyBinding{
 			toggle,
+			fs,
 			{Key: "↑/↓", Desc: "scroll"},
 			{Key: "←/→", Desc: "pan"},
 			{Key: "[/]", Desc: "record"},
@@ -249,6 +255,12 @@ func (v *MainView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 			v.inputMode = inputModeSQL
 		}
 		v.focus = focusInput
+		return v, nil
+	}
+
+	// F5 toggles fullscreen for the currently focused panel
+	if msg.String() == "f5" {
+		v.fullscreen = !v.fullscreen
 		return v, nil
 	}
 
@@ -799,7 +811,92 @@ func (v *MainView) formatResultExpanded(r *db.QueryResult) []string {
 	return lines
 }
 
+// renderTableList renders the scrollable table list items.
+// maxWidth controls truncation, visibleRows controls the scroll window.
+func (v *MainView) renderTableList(maxWidth, visibleRows int) []string {
+	if v.tableErr != nil {
+		return []string{StyleError.Render("Error: " + v.tableErr.Error())}
+	}
+	if len(v.tables) == 0 {
+		return []string{StyleDimmed.Render(" (no tables)")}
+	}
+
+	start := 0
+	if v.tableIdx > visibleRows/2 {
+		start = v.tableIdx - visibleRows/2
+	}
+	end := start + visibleRows
+	if end > len(v.tables) {
+		end = len(v.tables)
+	}
+
+	var lines []string
+	for i := start; i < end; i++ {
+		name := v.tables[i]
+		suffix := ""
+		if i < len(v.tableRows) {
+			suffix = " (" + db.FormatRowCount(v.tableRows[i]) + ")"
+		}
+		display := name + suffix
+		if maxWidth > 4 && len(display) > maxWidth {
+			maxName := maxWidth - len(suffix) - 1
+			if maxName > 0 && maxName < len(name) {
+				display = name[:maxName] + "…" + suffix
+			} else if maxWidth > 1 {
+				display = display[:maxWidth-1] + "…"
+			}
+		}
+		if i == v.tableIdx {
+			if v.focus == focusSidebar {
+				lines = append(lines, StyleListItemActive.Render("▸ "+display))
+			} else {
+				lines = append(lines, StyleDimmed.Render("▸ "+display))
+			}
+		} else {
+			lines = append(lines, StyleDimmed.Render("  "+display))
+		}
+	}
+	return lines
+}
+
 func (v *MainView) View() string {
+	// ── Fullscreen mode: show only the focused panel ──
+	if v.fullscreen {
+		hint := StyleDimmed.Render("  [F5 exit fullscreen]")
+		switch v.focus {
+		case focusSidebar:
+			lines := v.renderTableList(v.width, v.height-2)
+			header := StyleBold.Render("Tables") + hint
+			result := []string{header, ""}
+			result = append(result, lines...)
+			for len(result) < v.height {
+				result = append(result, "")
+			}
+			return strings.Join(result, "\n")
+
+		case focusResults:
+			v.viewport.SetSize(v.width, v.height-1)
+			return hint + "\n" + v.viewport.Render()
+
+		case focusInput:
+			var label, txt string
+			if v.inputMode == inputModeChat {
+				label = "Ask> "
+				txt = v.chatInput
+			} else {
+				label = "SQL> "
+				txt = v.input
+			}
+			content := StylePrompt.Render(label) + txt + "█"
+			lines := []string{hint, "", content}
+			for len(lines) < v.height {
+				lines = append(lines, "")
+			}
+			return strings.Join(lines, "\n")
+		}
+	}
+
+	// ── Normal layout ──
 	// Dimensions
 	sidebarWidth := v.width / 5 // 20% of full width
 	if sidebarWidth < 20 {
@@ -818,49 +915,7 @@ func (v *MainView) View() string {
 		sidebarTitle = lipgloss.NewStyle().Foreground(ColorAccent).Render(" ●") + " Tables"
 	}
 	tableList = append(tableList, headerStyle.Render(sidebarTitle))
-
-	if v.tableErr != nil {
-		tableList = append(tableList, StyleError.Render("Error: "+v.tableErr.Error()))
-	} else if len(v.tables) > 0 {
-		limit := v.height
-		start := 0
-		if v.tableIdx > limit/2 {
-			start = v.tableIdx - limit/2
-		}
-		end := start + limit
-		if end > len(v.tables) {
-			end = len(v.tables)
-		}
-		for i := start; i < end; i++ {
-			name := v.tables[i]
-			// Append row count suffix
-			suffix := ""
-			if i < len(v.tableRows) {
-				suffix = " (" + db.FormatRowCount(v.tableRows[i]) + ")"
-			}
-			display := name + suffix
-			if len(display) > sidebarWidth-4 {
-				// Truncate name but keep the suffix
-				maxName := sidebarWidth - 4 - len(suffix) - 1
-				if maxName > 0 {
-					display = name[:maxName] + "…" + suffix
-				} else {
-					display = display[:sidebarWidth-4] + "…"
-				}
-			}
-			if i == v.tableIdx {
-				if v.focus == focusSidebar {
-					tableList = append(tableList, StyleListItemActive.Render("▸ "+display))
-				} else {
-					tableList = append(tableList, StyleDimmed.Render("▸ "+display))
-				}
-			} else {
-				tableList = append(tableList, StyleDimmed.Render("  "+display))
-			}
-		}
-	} else {
-		tableList = append(tableList, StyleDimmed.Render(" (no tables)"))
-	}
+	tableList = append(tableList, v.renderTableList(sidebarWidth-4, v.height)...)
 
 	// Pad table list to fill sidebar height so the border extends to the bottom
 	for len(tableList) < v.height+1 {

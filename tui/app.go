@@ -393,6 +393,19 @@ func (a *App) View() string {
 
 	innerContent := lipgloss.JoinVertical(lipgloss.Left, innerSections...)
 
+	// Check if active view is in fullscreen mode
+	isFullscreen := false
+	if a.activeTab < len(a.views) {
+		if mv, ok := a.views[a.activeTab].(*MainView); ok && mv.fullscreen {
+			isFullscreen = true
+		}
+	}
+
+	// In fullscreen: no border, no header, no status — clean text for copy
+	if isFullscreen && a.activeTab < len(a.views) {
+		return a.views[a.activeTab].View()
+	}
+
 	// Frame height = Total - Header(1) - Status(1) - Slack(2)
 	frameHeight := a.height - 4
 	if frameHeight < 0 {
