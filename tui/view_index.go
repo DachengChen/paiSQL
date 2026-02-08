@@ -110,6 +110,7 @@ func (v *IndexView) analyze() tea.Cmd {
 
 	v.loading = true
 
+	providerName := v.aiProvider.Name()
 	return func() tea.Msg {
 		ctx := context.Background()
 
@@ -119,8 +120,13 @@ func (v *IndexView) analyze() tea.Cmd {
 			return IndexSuggestionMsg{Err: err}
 		}
 
-		// Then, ask AI for suggestions
+		// Log and ask AI for suggestions
+		ai.LogAIRequest("SuggestIndexes", providerName, map[string]string{
+			"SQL":     sql,
+			"Explain": explain.JSON,
+		})
 		suggestion, err := v.aiProvider.SuggestIndexes(ctx, sql, explain.JSON)
+		ai.LogAIResponse("SuggestIndexes", suggestion, err)
 		return IndexSuggestionMsg{Suggestion: suggestion, Err: err}
 	}
 }

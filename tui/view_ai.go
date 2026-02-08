@@ -140,8 +140,19 @@ func (v *AIView) sendMessage() tea.Cmd {
 	msgs := make([]ai.Message, len(v.messages))
 	copy(msgs, v.messages)
 
+	providerName := v.provider.Name()
 	return func() tea.Msg {
+		// Build input summary for logging
+		var inputSummary string
+		for _, m := range msgs {
+			inputSummary += m.Role + ": " + m.Content + "\n"
+		}
+		ai.LogAIRequest("Chat", providerName, map[string]string{
+			"Messages": inputSummary,
+		})
+
 		resp, err := v.provider.Chat(context.Background(), msgs)
+		ai.LogAIResponse("Chat", resp, err)
 		return AIResponseMsg{Response: resp, Err: err}
 	}
 }

@@ -166,25 +166,7 @@ func (p *QueryPlan) toSelectSQL() (string, error) {
 		selectCols = strings.Join(p.Select, ", ")
 	}
 
-	// FROM + JOINs
-	fromClause := p.Tables[0]
-	for i := 1; i < len(p.Tables); i++ {
-		joinCond := ""
-		// Find the join condition for this table
-		for _, j := range p.Joins {
-			if strings.Contains(j, p.Tables[i]+".") {
-				joinCond = j
-				break
-			}
-		}
-		if joinCond != "" {
-			fromClause += fmt.Sprintf("\nJOIN %s ON %s", p.Tables[i], joinCond)
-		} else {
-			fromClause += fmt.Sprintf("\nCROSS JOIN %s", p.Tables[i])
-		}
-	}
-
-	sql := fmt.Sprintf("SELECT %s\nFROM %s", selectCols, fromClause)
+	sql := fmt.Sprintf("SELECT %s\nFROM %s", selectCols, p.buildFromClause())
 
 	// WHERE
 	if len(p.Filters) > 0 {
@@ -208,6 +190,43 @@ func (p *QueryPlan) toSelectSQL() (string, error) {
 	}
 
 	return sql, nil
+}
+
+// ToCountSQL generates a COUNT(*) query with the same FROM/JOIN/WHERE
+// as the SELECT query, so filtered results get accurate counts.
+func (p *QueryPlan) ToCountSQL() string {
+	if len(p.Tables) == 0 {
+		return ""
+	}
+
+	sql := fmt.Sprintf("SELECT count(*) FROM %s", p.buildFromClause())
+
+	if len(p.Filters) > 0 {
+		sql += "\nWHERE " + strings.Join(p.Filters, "\n  AND ")
+	}
+
+	return sql
+}
+
+// buildFromClause builds the FROM + JOIN clause shared by SELECT and COUNT queries.
+func (p *QueryPlan) buildFromClause() string {
+	fromClause := p.Tables[0]
+	for i := 1; i < len(p.Tables); i++ {
+		joinCond := ""
+		// Find the join condition for this table
+		for _, j := range p.Joins {
+			if strings.Contains(j, p.Tables[i]+".") {
+				joinCond = j
+				break
+			}
+		}
+		if joinCond != "" {
+			fromClause += fmt.Sprintf("\nJOIN %s ON %s", p.Tables[i], joinCond)
+		} else {
+			fromClause += fmt.Sprintf("\nCROSS JOIN %s", p.Tables[i])
+		}
+	}
+	return fromClause
 }
 
 func (p *QueryPlan) toUpdateSQL() (string, error) {

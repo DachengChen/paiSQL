@@ -290,7 +290,7 @@ func (v *MainView) Update(msg tea.Msg) (View, tea.Cmd) {
 			// SELECT: auto-execute with rich info (same as table browse)
 			v.chatMessages = append(v.chatMessages, ai.Message{
 				Role:    "assistant",
-				Content: fmt.Sprintf("📋 %s\n\n🔄 Executing query...", plan.Summary()),
+				Content: fmt.Sprintf("📋 %s\n\n```sql\n%s\n```\n\n🔄 Executing...", plan.Summary(), msg.SQL),
 			})
 			v.viewport.SetContentLines(v.renderChatHistory())
 			v.viewport.End()
@@ -729,8 +729,18 @@ func (v *MainView) sendChatMessage() tea.Cmd {
 	}
 
 	provider := v.aiProvider
+	providerName := provider.Name()
 	return func() tea.Msg {
+		var inputSummary string
+		for _, m := range msgs {
+			inputSummary += m.Role + ": " + m.Content + "\n"
+		}
+		ai.LogAIRequest("Chat", providerName, map[string]string{
+			"Messages": inputSummary,
+		})
+
 		resp, err := provider.Chat(context.Background(), msgs)
+		ai.LogAIResponse("Chat", resp, err)
 		return AIResponseMsg{Response: resp, Err: err}
 	}
 }
@@ -773,23 +783,33 @@ func (v *MainView) generateQueryPlan(question string) tea.Cmd {
 		// Build the schema context text
 		schemaContext := db.FormatSchemaContext(mainSchema, relatedSchemas)
 
+		// Log the request
+		providerName := fmt.Sprintf("%T", provider)
+		ai.LogQueryPlanRequest(providerName, schemaContext, question, dataViewState)
+
 		// Call AI to generate query plan
 		rawResponse, err := provider.GenerateQueryPlan(ctx, schemaContext, question, dataViewState)
 		if err != nil {
+			ai.LogQueryPlanResponse(rawResponse, nil, "", err)
 			return QueryPlanMsg{Err: fmt.Errorf("AI error: %w", err), RawResponse: rawResponse}
 		}
 
 		// Parse the JSON response into a QueryPlan
 		plan, err := ai.ParseQueryPlan(rawResponse)
 		if err != nil {
+			ai.LogQueryPlanResponse(rawResponse, nil, "", err)
 			return QueryPlanMsg{Err: err, RawResponse: rawResponse}
 		}
 
 		// Convert the plan to SQL
 		sql, err := plan.ToSQL()
 		if err != nil {
+			ai.LogQueryPlanResponse(rawResponse, plan, "", err)
 			return QueryPlanMsg{Plan: plan, Err: fmt.Errorf("SQL generation error: %w", err), RawResponse: rawResponse}
 		}
+
+		// Log the successful response
+		ai.LogQueryPlanResponse(rawResponse, plan, sql, nil)
 
 		return QueryPlanMsg{Plan: plan, SQL: sql, RawResponse: rawResponse}
 	}
@@ -838,18 +858,20 @@ func (v *MainView) fetchQueryPlanPage(plan *ai.QueryPlan, sql string) tea.Cmd {
 		sortInfo = fmt.Sprintf("  |  Sort: %s %s", plan.Sort.Column, strings.ToUpper(plan.Sort.Order))
 	}
 
+	// Build the count SQL that matches the same JOINs and filters
+	countSQL := plan.ToCountSQL()
+
 	database := v.db
 	return func() tea.Msg {
 		ctx := context.Background()
 
-		// Get real row count for the main table
+		// Get filtered row count (using same JOINs + WHERE as the main query)
 		var total int64
-		if mainTable != "" {
-			countSQL := fmt.Sprintf("SELECT count(*) FROM %s", mainTable)
+		if countSQL != "" {
 			_ = database.Pool.QueryRow(ctx, countSQL).Scan(&total)
 		}
 
-		// Get table size info
+		// Get table size info for the main table
 		var totalSize, tableSize, indexSize string
 		if mainTable != "" {
 			sizeSQL := `SELECT pg_size_pretty(pg_total_relation_size($1)),

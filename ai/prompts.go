@@ -81,13 +81,21 @@ Example:
 - country has column "name"
 → Filter: "country.name = 'China'"
 
+## Select columns
+
+- If the user does NOT explicitly ask to show/display only specific columns, set "select": ["*"]
+- ONLY narrow the select list when the user explicitly says things like:
+  "show only id and name", "display just the email", "list the name column"
+- Mentioning a column in a sort, filter, or condition does NOT mean the user wants only that column.
+  For example: "sort by id" → select ALL columns, just sort by id.
+
 ## Output format
 
 {
   "tables": ["company", "country"],
   "joins": ["company.country_id = country.id"],
   "filters": ["country.name = 'China'"],
-  "select": ["company.id", "company.name"],
+  "select": ["*"],
   "limit": 10,
   "page": 1,
   "sort": { "column": "company.name", "order": "asc" },
@@ -118,4 +126,5 @@ If the user provides current page/limit state, respect it:
 - If the request cannot be satisfied, output: {"need_other_tables": true}
 - Default limit is 20 if not specified
 - Default page is 1
-- Default action is "select"`
+- Default action is "select"
+- Default select is ["*"] (all columns)`

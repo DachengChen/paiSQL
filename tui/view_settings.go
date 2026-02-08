@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/DachengChen/paiSQL/ai"
+	"github.com/DachengChen/paiSQL/applog"
 	"github.com/DachengChen/paiSQL/config"
 	"github.com/DachengChen/paiSQL/db"
 	tea "github.com/charmbracelet/bubbletea"
@@ -575,10 +576,14 @@ func (v *ConnectView) connect() tea.Cmd {
 	_ = config.SaveAppConfig(v.appCfg)
 
 	return func() tea.Msg {
+		applog.Event("CONNECT", "Connecting to %s@%s:%s/%s (ssl=%s, ssh=%v)",
+			conn.User, conn.Host, conn.Port, conn.Database, conn.SSLMode, conn.SSH.Enabled)
 		database, err := db.Connect(context.Background(), cfg)
 		if err != nil {
+			applog.Error("Connection failed: %v", err)
 			return ConnectErrorMsg{Err: err}
 		}
+		applog.Event("CONNECT", "Connected successfully to %s/%s", conn.Host, conn.Database)
 		return ConnectedMsg{DB: database, Cfg: cfg, Conn: conn}
 	}
 }
@@ -595,10 +600,13 @@ func (v *ConnectView) saveConnection() tea.Cmd {
 	v.store.Add(conn)
 
 	if err := v.store.Save(); err != nil {
+		applog.Error("Failed to save connection '%s': %v", name, err)
 		v.err = err
 		return nil
 	}
 
+	applog.Event("CONFIG", "Connection saved: %s (%s@%s:%s/%s)",
+		name, conn.User, conn.Host, conn.Port, conn.Database)
 	v.statusMsg = fmt.Sprintf("Connection '%s' saved!", name)
 	v.err = nil
 
@@ -621,10 +629,12 @@ func (v *ConnectView) deleteConnection() tea.Cmd {
 	v.store.Delete(name)
 
 	if err := v.store.Save(); err != nil {
+		applog.Error("Failed to delete connection '%s': %v", name, err)
 		v.err = err
 		return nil
 	}
 
+	applog.Event("CONFIG", "Connection deleted: %s", name)
 	v.statusMsg = fmt.Sprintf("Connection '%s' deleted.", name)
 	v.err = nil
 
@@ -894,9 +904,12 @@ func (v *ConnectView) antigravityManualCode() tea.Cmd {
 func (v *ConnectView) saveAIConfig() tea.Cmd {
 	v.applyAIConfig()
 	if err := config.SaveAppConfig(v.appCfg); err != nil {
+		applog.Error("Failed to save AI config: %v", err)
 		v.err = err
 		return nil
 	}
+	applog.Event("CONFIG", "AI config saved: provider=%s, model=%s",
+		v.fields[fieldAIProvider], v.fields[fieldAIModel])
 	v.statusMsg = "AI config saved!"
 	v.err = nil
 	return nil
