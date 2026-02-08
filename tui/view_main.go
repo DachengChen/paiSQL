@@ -125,7 +125,7 @@ func (v *MainView) ShortHelp() []KeyBinding {
 			{Key: "↑/↓", Desc: "navigate"},
 			{Key: "Enter", Desc: "data"},
 			{Key: "d", Desc: "describe"},
-			{Key: "Tab", Desc: "focus results"},
+			{Key: "F3/F4", Desc: "prev/next pane"},
 		}
 	} else if v.focus == focusResults {
 		return []KeyBinding{
@@ -135,7 +135,7 @@ func (v *MainView) ShortHelp() []KeyBinding {
 			{Key: "←/→", Desc: "pan"},
 			{Key: "[/]", Desc: "record"},
 			{Key: "x", Desc: "expand"},
-			{Key: "Tab", Desc: "focus input"},
+			{Key: "F3/F4", Desc: "prev/next pane"},
 		}
 	}
 
@@ -149,7 +149,8 @@ func (v *MainView) ShortHelp() []KeyBinding {
 	return []KeyBinding{
 		toggle,
 		{Key: "Enter", Desc: "execute"},
-		{Key: "Tab", Desc: "focus tables"},
+		{Key: "Tab", Desc: "autocomplete"},
+		{Key: "F3/F4", Desc: "prev/next pane"},
 		{Key: "↑/↓", Desc: "history"},
 	}
 }
@@ -372,12 +373,12 @@ func (v *MainView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 		return v, nil
 	}
 
-	// Navigate between panes
-	if msg.String() == "tab" {
+	// Navigate between panes — F3 prev, F4 next; Tab works except in SQL input
+	if msg.String() == "f4" || (msg.String() == "tab" && !(v.focus == focusInput && v.inputMode == inputModeSQL)) {
 		v.focus = (v.focus + 1) % 3
 		return v, nil
 	}
-	if msg.String() == "shift+tab" {
+	if msg.String() == "f3" || (msg.String() == "shift+tab" && !(v.focus == focusInput && v.inputMode == inputModeSQL)) {
 		v.focus--
 		if v.focus < 0 {
 			v.focus = 2
@@ -533,6 +534,9 @@ func (v *MainView) handleInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		return v, v.execute()
+	case "tab":
+		// Simple table name autocomplete: find the word being typed and match against table names
+		v.input = v.autocompleteTable(v.input)
 	case "up":
 		if len(v.history) > 0 {
 			if v.histIdx < len(v.history)-1 {
@@ -558,6 +562,55 @@ func (v *MainView) handleInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
 		}
 	}
 	return v, nil
+}
+
+// autocompleteTable completes the last word in the input against known table names
+// and common SQL keywords.
+func (v *MainView) autocompleteTable(input string) string {
+	if input == "" {
+		return input
+	}
+
+	// Find the last word being typed
+	lastSpace := strings.LastIndexAny(input, " \t,.()")
+	var prefix, partial string
+	if lastSpace == -1 {
+		prefix = ""
+		partial = input
+	} else {
+		prefix = input[:lastSpace+1]
+		partial = input[lastSpace+1:]
+	}
+
+	if partial == "" {
+		return input
+	}
+
+	lower := strings.ToLower(partial)
+
+	// Try table names first
+	for _, t := range v.tables {
+		if strings.HasPrefix(strings.ToLower(t), lower) && strings.ToLower(t) != lower {
+			return prefix + t
+		}
+	}
+
+	// Try SQL keywords
+	keywords := []string{
+		"SELECT", "FROM", "WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER",
+		"INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "INDEX",
+		"ORDER", "GROUP", "HAVING", "LIMIT", "OFFSET", "BEGIN", "COMMIT",
+		"ROLLBACK", "AND", "OR", "NOT", "NULL", "INTO", "VALUES", "SET",
+		"TABLE", "AS", "ON", "IN", "LIKE", "ILIKE", "BETWEEN", "EXISTS",
+		"DISTINCT", "COUNT", "SUM", "AVG", "MIN", "MAX", "EXPLAIN", "ANALYZE",
+	}
+	for _, kw := range keywords {
+		if strings.HasPrefix(strings.ToLower(kw), lower) && strings.ToLower(kw) != lower {
+			return prefix + kw
+		}
+	}
+
+	return input
 }
 
 func (v *MainView) execute() tea.Cmd {
