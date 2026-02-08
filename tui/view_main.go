@@ -11,6 +11,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"unicode/utf8"
 
@@ -84,6 +85,9 @@ type MainView struct {
 	pendingSQL    string // SQL from a modification plan, waiting to be pasted
 	inTransaction bool   // true after BEGIN is executed
 
+	// Last executed SQL for copy feature
+	lastSQL string
+
 	// Fullscreen toggle (F5) — hides sidebar for clean text selection
 	fullscreen bool
 }
@@ -135,6 +139,7 @@ func (v *MainView) ShortHelp() []KeyBinding {
 			{Key: "←/→", Desc: "pan"},
 			{Key: "[/]", Desc: "record"},
 			{Key: "x", Desc: "expand"},
+			{Key: "c", Desc: "copy SQL"},
 			{Key: "F3/F4", Desc: "prev/next pane"},
 		}
 	}
@@ -289,6 +294,7 @@ func (v *MainView) Update(msg tea.Msg) (View, tea.Cmd) {
 
 		// Save the plan for pagination
 		v.lastQueryPlan = plan
+		v.lastSQL = strings.Join(strings.Fields(msg.SQL), " ") + ";"
 		if plan.Sort != nil {
 			v.planSortCol = plan.Sort.Column
 			v.planSortOrder = plan.Sort.Order
@@ -383,6 +389,12 @@ func (v *MainView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 		if v.focus < 0 {
 			v.focus = 2
 		}
+		return v, nil
+	}
+
+	// Global: 'c' copies the last SQL to clipboard (unless typing in an input field)
+	if msg.String() == "c" && v.focus != focusInput && v.lastSQL != "" {
+		v.copyToClipboard(v.lastSQL)
 		return v, nil
 	}
 
@@ -526,6 +538,10 @@ func (v *MainView) handleResultsKey(msg tea.KeyMsg) (View, tea.Cmd) {
 			}
 			v.viewport.SetContentLines(lines)
 		}
+	case "c":
+		if v.lastSQL != "" {
+			v.copyToClipboard(v.lastSQL)
+		}
 	}
 	return v, nil
 }
@@ -613,6 +629,26 @@ func (v *MainView) autocompleteTable(input string) string {
 	return input
 }
 
+// copyToClipboard copies text to the system clipboard using pbcopy (macOS).
+func (v *MainView) copyToClipboard(text string) {
+	cmd := exec.Command("pbcopy")
+	cmd.Stdin = strings.NewReader(text)
+	if err := cmd.Run(); err != nil {
+		return
+	}
+	// Show brief confirmation in the result status area
+	if v.result != nil {
+		v.result.Status += "  ✅ SQL copied!"
+		var lines []string
+		if v.expandedMode {
+			lines = v.formatResultExpanded(v.result)
+		} else {
+			lines = v.formatResult(v.result)
+		}
+		v.viewport.SetContentLines(lines)
+	}
+}
+
 func (v *MainView) execute() tea.Cmd {
 	input := strings.TrimSpace(v.input)
 	if input == "" {
@@ -639,6 +675,7 @@ func (v *MainView) execute() tea.Cmd {
 	sql := v.vars.Expand(input)
 	v.loading = true
 	v.input = ""
+	v.lastSQL = strings.Join(strings.Fields(sql), " ") + ";"
 	return func() tea.Msg {
 		result, err := v.db.Execute(context.Background(), sql)
 		return QueryResultMsg{Result: result, Err: err}
@@ -651,6 +688,8 @@ func (v *MainView) fetchPage() tea.Cmd {
 	page := v.pagPage
 	pageSize := v.pagPageSize
 	v.loading = true
+	offset := page * pageSize
+	v.lastSQL = fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET %d;", table, pageSize, offset)
 	return func() tea.Msg {
 		ctx := context.Background()
 
@@ -666,11 +705,12 @@ func (v *MainView) fetchPage() tea.Cmd {
 		                   pg_size_pretty(pg_indexes_size($1))`
 		_ = v.db.Pool.QueryRow(ctx, sizeSQL, table).Scan(&totalSize, &tableSize, &indexSize)
 
-		info := fmt.Sprintf("📊 %s  |  Total: %s  |  Table: %s  |  Indexes: %s  |  %d rows",
-			table, totalSize, tableSize, indexSize, total)
-
 		offset := page * pageSize
 		sql := fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET %d", table, pageSize, offset)
+
+		info := fmt.Sprintf("🔍 %s;\n📊 %s  |  Total: %-8s  |  Table: %-8s  |  Indexes: %-8s  |  %d rows",
+			sql, table, totalSize, tableSize, indexSize, total)
+
 		result, err := v.db.Execute(ctx, sql)
 		if result != nil {
 			lastRow := offset + result.RowCount
@@ -976,8 +1016,9 @@ func (v *MainView) fetchQueryPlanPage(plan *ai.QueryPlan, sql string) tea.Cmd {
 		}
 
 		// Build info header (same format as fetchPage)
-		info := fmt.Sprintf("📊 %s  |  Total: %s  |  Table: %s  |  Indexes: %s  |  %d rows%s",
-			mainTable, totalSize, tableSize, indexSize, total, sortInfo)
+		oneLine := strings.Join(strings.Fields(sql), " ") + ";"
+		info := fmt.Sprintf("🔍 %s\n📊 %s  |  Total: %-8s  |  Table: %-8s  |  Indexes: %-8s  |  %d rows%s",
+			oneLine, mainTable, totalSize, tableSize, indexSize, total, sortInfo)
 
 		// Add filter info if present
 		if len(plan.Filters) > 0 {
