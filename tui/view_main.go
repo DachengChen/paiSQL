@@ -573,8 +573,13 @@ func (v *MainView) handleInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
 			v.input = v.input[:len(v.input)-1]
 		}
 	default:
-		if len(msg.String()) == 1 || msg.String() == " " {
-			v.input += msg.String()
+		// Accept typed characters AND pasted text (bracketed paste).
+		// Pasted text arrives as KeyRunes with Paste=true; String() wraps
+		// it in "[...]" so the old len()==1 check rejected it.
+		if msg.Type == tea.KeyRunes {
+			v.input += string(msg.Runes)
+		} else if msg.Type == tea.KeySpace {
+			v.input += " "
 		}
 	}
 	return v, nil
@@ -667,6 +672,23 @@ func (v *MainView) execute() tea.Cmd {
 		v.inTransaction = true
 	} else if upper == "COMMIT" || upper == "ROLLBACK" {
 		v.inTransaction = false
+	}
+
+	// Block modification commands outside a transaction
+	if !v.inTransaction && !strings.HasPrefix(input, "\\") {
+		firstWord := strings.ToUpper(strings.Fields(cleanInput)[0])
+		switch firstWord {
+		case "INSERT", "UPDATE", "DELETE", "ALTER", "DROP", "CREATE", "TRUNCATE":
+			v.viewport.SetContentLines([]string{
+				"⚠️  Modification commands require a transaction",
+				"",
+				"  1. Type: BEGIN;",
+				"  2. Run your command",
+				"  3. Type: COMMIT;  (to save)  or  ROLLBACK;  (to undo)",
+			})
+			v.input = input // keep the input so the user doesn't lose it
+			return nil
+		}
 	}
 
 	if strings.HasPrefix(input, "\\") {
@@ -811,8 +833,11 @@ func (v *MainView) handleChatInputKey(msg tea.KeyMsg) (View, tea.Cmd) {
 			v.chatInput = v.chatInput[:len(v.chatInput)-1]
 		}
 	default:
-		if len(msg.String()) == 1 || msg.String() == " " {
-			v.chatInput += msg.String()
+		// Accept typed characters AND pasted text (bracketed paste).
+		if msg.Type == tea.KeyRunes {
+			v.chatInput += string(msg.Runes)
+		} else if msg.Type == tea.KeySpace {
+			v.chatInput += " "
 		}
 	}
 	return v, nil
