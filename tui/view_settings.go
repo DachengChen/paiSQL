@@ -1,4 +1,4 @@
-// view_connect.go — Connection setup screen with integrated AI settings.
+// view_settings.go — Settings screen with connection and AI configuration.
 //
 // This is the first screen shown when paiSQL starts. It has two blocks:
 //
@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DachengChen/paiSQL/ai"
+	"github.com/DachengChen/paiSQL/applog"
 	"github.com/DachengChen/paiSQL/config"
 	"github.com/DachengChen/paiSQL/db"
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,7 +47,10 @@ const (
 	fieldAIProvider
 	fieldAIAPIKey
 	fieldAIModel
-	fieldAIHost // only for Ollama
+	fieldAIHost     // only for Ollama
+	fieldAILogin    // only for Antigravity — "Login with Google" button
+	fieldAILogout   // only for Antigravity — "Logout" button
+	fieldAIAuthCode // only for Antigravity — paste callback URL from browser (SSH/remote)
 	fieldAISave
 	fieldCount // sentinel
 )
@@ -82,6 +87,9 @@ var fieldLabels = map[int]string{
 	fieldAIAPIKey:   "API Key",
 	fieldAIModel:    "Model",
 	fieldAIHost:     "Host",
+	fieldAILogin:    "Login with Google",
+	fieldAILogout:   "Logout",
+	fieldAIAuthCode: "Paste URL/Code",
 	fieldAISave:     "Save AI",
 }
 
@@ -89,23 +97,27 @@ var fieldLabels = map[int]string{
 var sslModes = []string{"disable", "require", "verify-ca", "verify-full", "prefer"}
 
 // AI provider options for cycling.
-var aiProviders = []string{"openai", "anthropic", "gemini", "ollama", "placeholder"}
+var aiProviders = []string{"openai", "anthropic", "gemini", "groq", "ollama", "antigravity", "placeholder"}
 
 // aiProviderDesc maps provider name to a short label.
 var aiProviderDesc = map[string]string{
 	"openai":      "OpenAI (GPT-4o)",
 	"anthropic":   "Anthropic (Claude)",
 	"gemini":      "Google Gemini",
+	"groq":        "Groq (fast)",
 	"ollama":      "Ollama (local)",
+	"antigravity": "Google OAuth (free)",
 	"placeholder": "None (disabled)",
 }
 
 // aiDefaultModels maps provider name to its default model.
 var aiDefaultModels = map[string]string{
-	"openai":    "gpt-4o",
-	"anthropic": "claude-sonnet-4-20250514",
-	"gemini":    "gemini-2.0-flash",
-	"ollama":    "llama3.2",
+	"openai":      "gpt-4o",
+	"anthropic":   "claude-sonnet-4-20250514",
+	"gemini":      "gemini-2.0-flash",
+	"groq":        "llama-3.1-8b-instant",
+	"ollama":      "llama3.2",
+	"antigravity": "gemini-2.0-flash",
 }
 
 // ConnectView is the connection + AI setup form.
@@ -124,6 +136,12 @@ type ConnectView struct {
 	block      int      // 0=connection, 1=AI
 	sshKeys    []string // discovered SSH key paths
 	sshKeyIdx  int      // selected index in sshKeys
+
+	// OAuth manual-code-entry state (for SSH/remote login)
+	oauthPending     bool            // true while waiting for OAuth completion
+	oauthAuthURL     string          // the Google auth URL for the user to copy
+	oauthRedirectURI string          // redirect URI needed for code exchange
+	oauthProvider    *ai.Antigravity // the provider instance for this login attempt
 }
 
 // ConnectedMsg is sent when a DB connection is successfully established.
@@ -197,10 +215,17 @@ func (v *ConnectView) loadAIFieldsFromConfig() {
 	case "gemini":
 		v.fields[fieldAIAPIKey] = v.appCfg.AI.Gemini.APIKey
 		v.fields[fieldAIModel] = v.appCfg.AI.Gemini.Model
+	case "groq":
+		v.fields[fieldAIAPIKey] = v.appCfg.AI.Groq.APIKey
+		v.fields[fieldAIModel] = v.appCfg.AI.Groq.Model
 	case "ollama":
 		v.fields[fieldAIAPIKey] = ""
 		v.fields[fieldAIModel] = v.appCfg.AI.Ollama.Model
 		v.fields[fieldAIHost] = v.appCfg.AI.Ollama.Host
+	case "antigravity":
+		v.fields[fieldAIAPIKey] = ""
+		v.fields[fieldAIModel] = v.appCfg.AI.Antigravity.Model
+		v.fields[fieldAIHost] = ""
 	default:
 		v.fields[fieldAIAPIKey] = ""
 		v.fields[fieldAIModel] = ""
@@ -214,7 +239,8 @@ func (v *ConnectView) loadAIFieldsFromConfig() {
 	}
 }
 
-func (v *ConnectView) Name() string { return "Connect" }
+func (v *ConnectView) Name() string         { return "Settings" }
+func (v *ConnectView) WantsTextInput() bool { return v.editing }
 
 func (v *ConnectView) SetSize(width, height int) {
 	v.width = width
@@ -229,13 +255,9 @@ func (v *ConnectView) ShortHelp() []KeyBinding {
 			{Key: "Ctrl+U", Desc: "clear"},
 		}
 	}
-	blockLabel := "AI"
-	if v.block == blockAI {
-		blockLabel = "Connection"
-	}
 	return []KeyBinding{
 		{Key: "↑/↓", Desc: "navigate"},
-		{Key: "Tab", Desc: blockLabel},
+		{Key: "Tab", Desc: "switch block"},
 		{Key: "Enter", Desc: "edit/action"},
 		{Key: "Ctrl+C", Desc: "quit"},
 	}
@@ -258,6 +280,18 @@ func (v *ConnectView) Update(msg tea.Msg) (View, tea.Cmd) {
 		v.connecting = false
 		v.err = msg.Err
 		v.statusMsg = ""
+		return v, nil
+
+	case AntigravityLoginMsg:
+		v.oauthPending = false
+		v.oauthAuthURL = ""
+		if msg.Err != nil {
+			v.err = msg.Err
+			v.statusMsg = ""
+		} else {
+			v.err = nil
+			v.statusMsg = "✅ Antigravity login successful!"
+		}
 		return v, nil
 	}
 
@@ -349,16 +383,38 @@ func (v *ConnectView) skipHiddenFields(dir int) {
 		}
 	}
 
-	// AI block: skip API key for ollama/placeholder, skip host for non-ollama
+	// AI block: skip fields based on provider
 	if v.block == blockAI {
 		provider := v.fields[fieldAIProvider]
-		if (provider == "ollama" || provider == "placeholder") && v.focusField == fieldAIAPIKey {
+		// Skip API key for ollama/placeholder/antigravity (they don't use API keys)
+		if (provider == "ollama" || provider == "placeholder" || provider == "antigravity") && v.focusField == fieldAIAPIKey {
 			v.focusField += dir
 		}
+		// Skip host for non-ollama
 		if provider != "ollama" && v.focusField == fieldAIHost {
 			v.focusField += dir
 		}
-		if provider == "placeholder" && (v.focusField == fieldAIModel || v.focusField == fieldAIHost) {
+		// Skip login button for non-antigravity
+		if provider != "antigravity" && v.focusField == fieldAILogin {
+			v.focusField += dir
+		}
+		// Skip logout button for non-antigravity or when not logged in
+		if v.focusField == fieldAILogout {
+			if provider != "antigravity" {
+				v.focusField += dir
+			} else {
+				ag := ai.NewAntigravity(v.fields[fieldAIModel])
+				if !ag.IsLoggedIn() {
+					v.focusField += dir
+				}
+			}
+		}
+		// Skip auth code field when not in OAuth pending state
+		if (!v.oauthPending || provider != "antigravity") && v.focusField == fieldAIAuthCode {
+			v.focusField += dir
+		}
+		// Skip model/host/login/logout/authcode for placeholder
+		if provider == "placeholder" && (v.focusField == fieldAIModel || v.focusField == fieldAIHost || v.focusField == fieldAILogin || v.focusField == fieldAILogout || v.focusField == fieldAIAuthCode) {
 			v.focusField += dir
 		}
 	}
@@ -433,8 +489,11 @@ func (v *ConnectView) handleEditing(msg tea.KeyMsg) (View, tea.Cmd) {
 		v.fields[field] = ""
 
 	default:
-		ch := msg.String()
-		if len(ch) == 1 || ch == " " {
+		// Accept typed characters and pasted text.
+		// msg.Type == tea.KeyRunes covers normal typing and paste.
+		if msg.Type == tea.KeyRunes {
+			v.fields[field] += msg.String()
+		} else if ch := msg.String(); len(ch) == 1 {
 			v.fields[field] += ch
 		}
 	}
@@ -481,6 +540,15 @@ func (v *ConnectView) handleAction() (View, tea.Cmd) {
 		}
 		return v, nil
 
+	case fieldAILogin:
+		return v, v.antigravityLogin()
+
+	case fieldAILogout:
+		return v, v.antigravityLogout()
+
+	case fieldAIAuthCode:
+		return v, v.antigravityManualCode()
+
 	case fieldAISave:
 		return v, v.saveAIConfig()
 
@@ -508,10 +576,14 @@ func (v *ConnectView) connect() tea.Cmd {
 	_ = config.SaveAppConfig(v.appCfg)
 
 	return func() tea.Msg {
+		applog.Event("CONNECT", "Connecting to %s@%s:%s/%s (ssl=%s, ssh=%v)",
+			conn.User, conn.Host, conn.Port, conn.Database, conn.SSLMode, conn.SSH.Enabled)
 		database, err := db.Connect(context.Background(), cfg)
 		if err != nil {
+			applog.Error("Connection failed: %v", err)
 			return ConnectErrorMsg{Err: err}
 		}
+		applog.Event("CONNECT", "Connected successfully to %s/%s", conn.Host, conn.Database)
 		return ConnectedMsg{DB: database, Cfg: cfg, Conn: conn}
 	}
 }
@@ -528,10 +600,13 @@ func (v *ConnectView) saveConnection() tea.Cmd {
 	v.store.Add(conn)
 
 	if err := v.store.Save(); err != nil {
+		applog.Error("Failed to save connection '%s': %v", name, err)
 		v.err = err
 		return nil
 	}
 
+	applog.Event("CONFIG", "Connection saved: %s (%s@%s:%s/%s)",
+		name, conn.User, conn.Host, conn.Port, conn.Database)
 	v.statusMsg = fmt.Sprintf("Connection '%s' saved!", name)
 	v.err = nil
 
@@ -554,10 +629,12 @@ func (v *ConnectView) deleteConnection() tea.Cmd {
 	v.store.Delete(name)
 
 	if err := v.store.Save(); err != nil {
+		applog.Error("Failed to delete connection '%s': %v", name, err)
 		v.err = err
 		return nil
 	}
 
+	applog.Event("CONFIG", "Connection deleted: %s", name)
 	v.statusMsg = fmt.Sprintf("Connection '%s' deleted.", name)
 	v.err = nil
 
@@ -741,28 +818,98 @@ func (v *ConnectView) loadAIKeyFromConfig() {
 // applyAIConfig writes the current AI form values back to appConfig.
 func (v *ConnectView) applyAIConfig() {
 	v.appCfg.AI.Provider = v.fields[fieldAIProvider]
+	// Strip brackets that may come from terminal bracketed paste
+	apiKey := strings.Trim(v.fields[fieldAIAPIKey], "[]")
 	switch v.fields[fieldAIProvider] {
 	case "openai":
-		v.appCfg.AI.OpenAI.APIKey = v.fields[fieldAIAPIKey]
+		v.appCfg.AI.OpenAI.APIKey = apiKey
 		v.appCfg.AI.OpenAI.Model = v.fields[fieldAIModel]
 	case "anthropic":
-		v.appCfg.AI.Anthropic.APIKey = v.fields[fieldAIAPIKey]
+		v.appCfg.AI.Anthropic.APIKey = apiKey
 		v.appCfg.AI.Anthropic.Model = v.fields[fieldAIModel]
 	case "gemini":
-		v.appCfg.AI.Gemini.APIKey = v.fields[fieldAIAPIKey]
+		v.appCfg.AI.Gemini.APIKey = apiKey
 		v.appCfg.AI.Gemini.Model = v.fields[fieldAIModel]
+	case "groq":
+		v.appCfg.AI.Groq.APIKey = apiKey
+		v.appCfg.AI.Groq.Model = v.fields[fieldAIModel]
 	case "ollama":
 		v.appCfg.AI.Ollama.Host = v.fields[fieldAIHost]
 		v.appCfg.AI.Ollama.Model = v.fields[fieldAIModel]
+	case "antigravity":
+		v.appCfg.AI.Antigravity.Model = v.fields[fieldAIModel]
+	}
+}
+
+// antigravityLogin starts the Google Antigravity OAuth login flow.
+func (v *ConnectView) antigravityLogin() tea.Cmd {
+	provider := ai.NewAntigravity(v.fields[fieldAIModel])
+	authURL, redirectURI, done, err := provider.Login()
+	if err != nil {
+		v.err = err
+		return nil
+	}
+
+	// Store state for manual code entry (SSH/remote scenario)
+	v.oauthPending = true
+	v.oauthAuthURL = authURL
+	v.oauthRedirectURI = redirectURI
+	v.oauthProvider = provider
+	v.fields[fieldAIAuthCode] = ""
+	v.statusMsg = "🔐 Opening browser for Google login... If no browser, copy the URL below."
+
+	return func() tea.Msg {
+		err := <-done
+		return AntigravityLoginMsg{Err: err}
+	}
+}
+
+// antigravityLogout clears the cached Antigravity OAuth credentials.
+func (v *ConnectView) antigravityLogout() tea.Cmd {
+	provider := ai.NewAntigravity(v.fields[fieldAIModel])
+	if err := provider.Logout(); err != nil {
+		v.err = err
+		return nil
+	}
+	v.oauthPending = false
+	v.oauthAuthURL = ""
+	v.oauthProvider = nil
+	v.statusMsg = "🔓 Logged out from Antigravity."
+	v.err = nil
+	return nil
+}
+
+// antigravityManualCode handles manual code/URL submission for SSH/remote OAuth.
+func (v *ConnectView) antigravityManualCode() tea.Cmd {
+	callbackInput := strings.TrimSpace(v.fields[fieldAIAuthCode])
+	if callbackInput == "" {
+		v.err = fmt.Errorf("paste the callback URL from your browser's address bar")
+		return nil
+	}
+
+	provider := v.oauthProvider
+	redirectURI := v.oauthRedirectURI
+	if provider == nil {
+		provider = ai.NewAntigravity(v.fields[fieldAIModel])
+	}
+
+	v.statusMsg = "🔐 Exchanging code..."
+
+	return func() tea.Msg {
+		err := provider.CompleteLoginWithCode(callbackInput, redirectURI)
+		return AntigravityLoginMsg{Err: err}
 	}
 }
 
 func (v *ConnectView) saveAIConfig() tea.Cmd {
 	v.applyAIConfig()
 	if err := config.SaveAppConfig(v.appCfg); err != nil {
+		applog.Error("Failed to save AI config: %v", err)
 		v.err = err
 		return nil
 	}
+	applog.Event("CONFIG", "AI config saved: provider=%s, model=%s",
+		v.fields[fieldAIProvider], v.fields[fieldAIModel])
 	v.statusMsg = "AI config saved!"
 	v.err = nil
 	return nil
@@ -773,19 +920,16 @@ func (v *ConnectView) saveAIConfig() tea.Cmd {
 // ─────────────────────────────────────────────────────────────
 
 func (v *ConnectView) View() string {
-	// Calculate panel widths: left panel gets 60%, right panel 40%
-	totalWidth := v.width
+	// Calculate panel widths: equal width for both panels
+	// Add horizontal padding so panels don't touch screen edges
+	sidePadding := 4 // padding on each side
+	gapWidth := 2    // gap between panels
+	totalWidth := v.width - sidePadding*2 - gapWidth
 	if totalWidth < 40 {
 		totalWidth = 40
 	}
-	leftWidth := (totalWidth * 6) / 10
+	leftWidth := totalWidth / 2
 	rightWidth := totalWidth - leftWidth
-	if leftWidth < 30 {
-		leftWidth = 30
-	}
-	if rightWidth < 25 {
-		rightWidth = 25
-	}
 
 	leftInputW := leftWidth - 24 // label + padding + border
 	rightInputW := rightWidth - 24
@@ -882,12 +1026,63 @@ func (v *ConnectView) View() string {
 	rightLines = append(rightLines, "")
 
 	if provider != "placeholder" {
-		if provider != "ollama" {
+		if provider != "ollama" && provider != "antigravity" {
 			rightLines = append(rightLines, v.renderMaskedField(fieldAIAPIKey, rightInputW))
 		}
 		rightLines = append(rightLines, v.renderField(fieldAIModel, rightInputW))
 		if provider == "ollama" {
 			rightLines = append(rightLines, v.renderField(fieldAIHost, rightInputW))
+		}
+		if provider == "antigravity" {
+			// Show login status
+			ag := ai.NewAntigravity(v.fields[fieldAIModel])
+			if ag.IsLoggedIn() {
+				email := ag.LoggedInEmail()
+				if email != "" {
+					rightLines = append(rightLines,
+						lipgloss.NewStyle().Foreground(ColorSuccess).Render("  ✅ "+email))
+				} else {
+					rightLines = append(rightLines,
+						lipgloss.NewStyle().Foreground(ColorSuccess).Render("  ✅ Logged in"))
+				}
+			} else {
+				rightLines = append(rightLines,
+					lipgloss.NewStyle().Foreground(ColorWarning).Render("  ⚠ Not logged in"))
+			}
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, v.renderButton(fieldAILogin))
+			if ag.IsLoggedIn() {
+				rightLines = append(rightLines, v.renderButton(fieldAILogout))
+			}
+
+			// Show auth URL and paste field when OAuth is pending
+			if v.oauthPending && v.oauthAuthURL != "" {
+				rightLines = append(rightLines, "")
+				rightLines = append(rightLines,
+					lipgloss.NewStyle().Foreground(ColorWarning).Bold(true).
+						Render("  📋 Copy this URL to your browser:"))
+				// Wrap URL across multiple lines so user can copy the full URL
+				urlStr := v.oauthAuthURL
+				wrapW := rightInputW + 10
+				if wrapW < 20 {
+					wrapW = 20
+				}
+				for len(urlStr) > 0 {
+					end := wrapW
+					if end > len(urlStr) {
+						end = len(urlStr)
+					}
+					rightLines = append(rightLines,
+						lipgloss.NewStyle().Foreground(ColorAccent).
+							Render("  "+urlStr[:end]))
+					urlStr = urlStr[end:]
+				}
+				rightLines = append(rightLines, "")
+				rightLines = append(rightLines,
+					lipgloss.NewStyle().Foreground(ColorDim).
+						Render("  After login, paste the callback URL here:"))
+				rightLines = append(rightLines, v.renderField(fieldAIAuthCode, rightInputW))
+			}
 		}
 	}
 
@@ -907,7 +1102,8 @@ func (v *ConnectView) View() string {
 	// Combine panels side by side
 	// ══════════════════════════════════════════
 
-	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, rightPanel)
+	gap := lipgloss.NewStyle().Width(2).Render("")
+	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gap, rightPanel)
 
 	// Status line below panels
 	var statusLine string

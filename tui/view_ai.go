@@ -34,6 +34,8 @@ func NewAIView(provider ai.Provider) *AIView {
 
 func (v *AIView) Name() string { return "AI" }
 
+func (v *AIView) WantsTextInput() bool { return true }
+
 func (v *AIView) SetSize(width, height int) {
 	v.width = width
 	v.height = height
@@ -112,8 +114,10 @@ func (v *AIView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 			v.input = v.input[:len(v.input)-1]
 		}
 	default:
-		if len(msg.String()) == 1 || msg.String() == " " {
-			v.input += msg.String()
+		if msg.Type == tea.KeyRunes {
+			v.input += string(msg.Runes)
+		} else if msg.Type == tea.KeySpace {
+			v.input += " "
 		}
 	}
 	return v, nil
@@ -138,8 +142,19 @@ func (v *AIView) sendMessage() tea.Cmd {
 	msgs := make([]ai.Message, len(v.messages))
 	copy(msgs, v.messages)
 
+	providerName := v.provider.Name()
 	return func() tea.Msg {
+		// Build input summary for logging
+		var inputSummary string
+		for _, m := range msgs {
+			inputSummary += m.Role + ": " + m.Content + "\n"
+		}
+		ai.LogAIRequest("Chat", providerName, map[string]string{
+			"Messages": inputSummary,
+		})
+
 		resp, err := v.provider.Chat(context.Background(), msgs)
+		ai.LogAIResponse("Chat", resp, err)
 		return AIResponseMsg{Response: resp, Err: err}
 	}
 }

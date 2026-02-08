@@ -9,54 +9,53 @@ import (
 	"net/http"
 )
 
-// OpenAI implements the Provider interface for OpenAI's Chat API.
-type OpenAI struct {
+// Groq implements the Provider interface using Groq's OpenAI-compatible API.
+type Groq struct {
 	apiKey string
 	model  string
 }
 
-var _ Provider = (*OpenAI)(nil)
+var _ Provider = (*Groq)(nil)
 
-// NewOpenAI creates an OpenAI provider.
-func NewOpenAI(apiKey, model string) *OpenAI {
+// NewGroq creates a Groq provider.
+func NewGroq(apiKey, model string) *Groq {
 	if model == "" {
-		model = "gpt-4o"
+		model = "llama-3.1-8b-instant"
 	}
-	return &OpenAI{apiKey: apiKey, model: model}
+	return &Groq{apiKey: apiKey, model: model}
 }
 
-func (o *OpenAI) Name() string {
-	return fmt.Sprintf("OpenAI (%s)", o.model)
+func (g *Groq) Name() string {
+	return fmt.Sprintf("Groq (%s)", g.model)
 }
 
-func (o *OpenAI) Chat(ctx context.Context, messages []Message) (string, error) {
-	return o.call(ctx, messages)
+func (g *Groq) Chat(ctx context.Context, messages []Message) (string, error) {
+	return g.call(ctx, messages)
 }
 
-func (o *OpenAI) SuggestIndexes(ctx context.Context, query string, explainJSON string) (string, error) {
+func (g *Groq) SuggestIndexes(ctx context.Context, query string, explainJSON string) (string, error) {
 	messages := []Message{
 		{Role: "system", Content: systemPromptIndex},
 		{Role: "user", Content: fmt.Sprintf("Query:\n%s\n\nEXPLAIN output:\n%s", query, explainJSON)},
 	}
-	return o.call(ctx, messages)
+	return g.call(ctx, messages)
 }
 
-func (o *OpenAI) GenerateQueryPlan(ctx context.Context, schemaContext string, userQuestion string, dataViewState string) (string, error) {
+func (g *Groq) GenerateQueryPlan(ctx context.Context, schemaContext string, userQuestion string, dataViewState string) (string, error) {
 	userContent := fmt.Sprintf("Schema:\n%s\n\nData view state:\n%s\n\nUser question: %s", schemaContext, dataViewState, userQuestion)
 	messages := []Message{
 		{Role: "system", Content: systemPromptQueryPlan},
 		{Role: "user", Content: userContent},
 	}
-	return o.call(ctx, messages)
+	return g.call(ctx, messages)
 }
 
-func (o *OpenAI) call(ctx context.Context, messages []Message) (string, error) {
+func (g *Groq) call(ctx context.Context, messages []Message) (string, error) {
 	type chatMsg struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
 
-	// Prepend system prompt for chat
 	apiMsgs := make([]chatMsg, 0, len(messages)+1)
 	hasSystem := false
 	for _, m := range messages {
@@ -70,7 +69,7 @@ func (o *OpenAI) call(ctx context.Context, messages []Message) (string, error) {
 	}
 
 	body := map[string]interface{}{
-		"model":    o.model,
+		"model":    g.model,
 		"messages": apiMsgs,
 	}
 
@@ -79,16 +78,16 @@ func (o *OpenAI) call(ctx context.Context, messages []Message) (string, error) {
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.groq.com/openai/v1/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+o.apiKey)
+	req.Header.Set("Authorization", "Bearer "+g.apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("openai request failed: %w", err)
+		return "", fmt.Errorf("groq request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -98,7 +97,7 @@ func (o *OpenAI) call(ctx context.Context, messages []Message) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openai API error (%d): %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("groq API error (%d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
@@ -109,11 +108,11 @@ func (o *OpenAI) call(ctx context.Context, messages []Message) (string, error) {
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("openai parse error: %w", err)
+		return "", fmt.Errorf("groq parse error: %w", err)
 	}
 
 	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("openai returned no choices")
+		return "", fmt.Errorf("groq returned no choices")
 	}
 
 	return result.Choices[0].Message.Content, nil

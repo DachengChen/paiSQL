@@ -73,12 +73,13 @@ air
 
 | Key | Action |
 |---|---|
+| `F2` | Toggle input between Chat and SQL |
 | `Tab` / `Shift+Tab` | Switch between views |
 | `1-6` | Jump to view by number |
 | `:` | Command mode (`:dt`, `:quit`, `:disconnect`) |
 | `/` | Jump to view by name |
 | `?` | Toggle help overlay |
-| `Enter` | Execute query |
+| `Enter` | Execute query / send chat |
 | `Ctrl+K/J` | Scroll up/down |
 | `Ctrl+H/L` | Scroll left/right |
 | `PgUp/PgDn` | Page up/down |
@@ -107,7 +108,7 @@ air
     ├── tui.go          # TUI entry point
     ├── app.go          # Root model (phases, tabs, commands)
     ├── view.go         # View interface
-    ├── view_connect.go # Connection setup form
+    ├── view_settings.go# Settings screen (connection + AI config)
     ├── viewport.go     # Scrollable viewport component
     ├── styles.go       # Color palette and shared styles
     ├── messages.go     # Async message types
@@ -169,6 +170,25 @@ export OPENAI_API_KEY="sk-..."
 | **Anthropic** | `ANTHROPIC_API_KEY` | claude-sonnet-4-20250514, etc. | |
 | **Gemini** | `GEMINI_API_KEY` | gemini-2.0-flash, gemini-2.5-pro, etc. | Google AI |
 | **Ollama** | `OLLAMA_HOST` | llama3.2, codellama, etc. | Free, runs locally |
+| **Antigravity** | — | gemini-2.0-flash, etc. | Free, uses Google OAuth login |
+
+### Antigravity (Google OAuth)
+
+Antigravity lets you use Gemini models for free by logging in with your Google account — no API key needed. Select "antigravity" as the provider in the AI Settings panel and click "Login with Google".
+
+**For developers building from source:** The OAuth Client ID and Secret are injected at build time via `-ldflags` (see `.goreleaser.yaml` and `.github/workflows/ci.yml`). These are the same public credentials used by the [Gemini CLI](https://github.com/google-gemini/gemini-cli). You can find them in the Gemini CLI source code:
+
+- **File:** [`packages/core/src/code_assist/oauth2.ts`](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/code_assist/oauth2.ts)
+- **Google's note:** *"It's ok to save this in git because this is an installed application"* — [Google OAuth2 docs](https://developers.google.com/identity/protocols/oauth2#installed)
+
+To set up locally:
+```bash
+# 1. Copy the example and fill in values from the Gemini CLI source
+cp .env.example .env
+
+# 2. paiSQL auto-loads .env on startup — just run it
+go run .
+```
 
 ## Saved Connections
 

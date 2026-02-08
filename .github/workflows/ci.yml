@@ -40,4 +40,8 @@ jobs:
         with:
           go-version: '1.24'
       - name: Build
-        run: go build -v ./...
+        run: |
+          go build -v -ldflags "
+            -X 'github.com/DachengChen/paiSQL/ai.antigravityClientID=${{ secrets.ANTIGRAVITY_CLIENT_ID }}'
+            -X 'github.com/DachengChen/paiSQL/ai.antigravityClientSecret=${{ secrets.ANTIGRAVITY_CLIENT_SECRET }}'
+          " ./...

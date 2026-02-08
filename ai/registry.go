@@ -7,7 +7,7 @@ import (
 )
 
 // SupportedProviders lists available provider names for display.
-var SupportedProviders = []string{"openai", "anthropic", "gemini", "ollama", "placeholder"}
+var SupportedProviders = []string{"openai", "anthropic", "gemini", "groq", "ollama", "antigravity", "placeholder"}
 
 // NewProvider creates an AI provider from the application config.
 // Falls back to placeholder if the selected provider isn't configured.
@@ -31,13 +31,22 @@ func NewProvider(cfg config.AIConfig) (Provider, error) {
 		}
 		return NewGemini(cfg.Gemini.APIKey, cfg.Gemini.Model), nil
 
+	case "groq":
+		if cfg.Groq.APIKey == "" {
+			return nil, fmt.Errorf("Groq API key not set. Set GROQ_API_KEY env var or add it to ~/.paisql/config.json")
+		}
+		return NewGroq(cfg.Groq.APIKey, cfg.Groq.Model), nil
+
 	case "ollama":
 		return NewOllama(cfg.Ollama.Host, cfg.Ollama.Model), nil
+
+	case "antigravity":
+		return NewAntigravity(cfg.Antigravity.Model), nil
 
 	case "placeholder", "":
 		return NewPlaceholder(), nil
 
 	default:
-		return nil, fmt.Errorf("unknown AI provider %q. Supported: openai, anthropic, ollama", cfg.Provider)
+		return nil, fmt.Errorf("unknown AI provider %q. Supported: openai, anthropic, gemini, groq, ollama, antigravity", cfg.Provider)
 	}
 }

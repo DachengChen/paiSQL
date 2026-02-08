@@ -34,7 +34,8 @@ func NewIndexView(database *db.DB, provider ai.Provider) *IndexView {
 	}
 }
 
-func (v *IndexView) Name() string { return "Index" }
+func (v *IndexView) Name() string         { return "Index" }
+func (v *IndexView) WantsTextInput() bool { return false }
 
 func (v *IndexView) SetSize(width, height int) {
 	v.width = width
@@ -94,8 +95,10 @@ func (v *IndexView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 			v.input = v.input[:len(v.input)-1]
 		}
 	default:
-		if len(msg.String()) == 1 || msg.String() == " " {
-			v.input += msg.String()
+		if msg.Type == tea.KeyRunes {
+			v.input += string(msg.Runes)
+		} else if msg.Type == tea.KeySpace {
+			v.input += " "
 		}
 	}
 	return v, nil
@@ -109,6 +112,7 @@ func (v *IndexView) analyze() tea.Cmd {
 
 	v.loading = true
 
+	providerName := v.aiProvider.Name()
 	return func() tea.Msg {
 		ctx := context.Background()
 
@@ -118,8 +122,13 @@ func (v *IndexView) analyze() tea.Cmd {
 			return IndexSuggestionMsg{Err: err}
 		}
 
-		// Then, ask AI for suggestions
+		// Log and ask AI for suggestions
+		ai.LogAIRequest("SuggestIndexes", providerName, map[string]string{
+			"SQL":     sql,
+			"Explain": explain.JSON,
+		})
 		suggestion, err := v.aiProvider.SuggestIndexes(ctx, sql, explain.JSON)
+		ai.LogAIResponse("SuggestIndexes", suggestion, err)
 		return IndexSuggestionMsg{Suggestion: suggestion, Err: err}
 	}
 }

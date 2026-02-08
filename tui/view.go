@@ -23,6 +23,11 @@ type View interface {
 
 	// SetSize is called when the terminal is resized.
 	SetSize(width, height int)
+
+	// WantsTextInput returns true when the view is accepting freeform text
+	// input (e.g. chat mode, editing a field). When true, the App should
+	// NOT intercept single-character shortcuts like q, 1-6, etc.
+	WantsTextInput() bool
 }
 
 // KeyBinding describes a keyboard shortcut for the help bar.

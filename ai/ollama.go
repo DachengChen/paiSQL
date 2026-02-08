@@ -44,6 +44,15 @@ func (o *Ollama) SuggestIndexes(ctx context.Context, query string, explainJSON s
 	return o.call(ctx, messages)
 }
 
+func (o *Ollama) GenerateQueryPlan(ctx context.Context, schemaContext string, userQuestion string, dataViewState string) (string, error) {
+	userContent := fmt.Sprintf("Schema:\n%s\n\nData view state:\n%s\n\nUser question: %s", schemaContext, dataViewState, userQuestion)
+	messages := []Message{
+		{Role: "system", Content: systemPromptQueryPlan},
+		{Role: "user", Content: userContent},
+	}
+	return o.call(ctx, messages)
+}
+
 func (o *Ollama) call(ctx context.Context, messages []Message) (string, error) {
 	type chatMsg struct {
 		Role    string `json:"role"`

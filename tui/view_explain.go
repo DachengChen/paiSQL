@@ -31,7 +31,8 @@ func NewExplainView(database *db.DB) *ExplainView {
 	}
 }
 
-func (v *ExplainView) Name() string { return "Explain" }
+func (v *ExplainView) Name() string         { return "Explain" }
+func (v *ExplainView) WantsTextInput() bool { return false }
 
 func (v *ExplainView) SetSize(width, height int) {
 	v.width = width
@@ -95,8 +96,10 @@ func (v *ExplainView) handleKey(msg tea.KeyMsg) (View, tea.Cmd) {
 			v.input = v.input[:len(v.input)-1]
 		}
 	default:
-		if len(msg.String()) == 1 || msg.String() == " " {
-			v.input += msg.String()
+		if msg.Type == tea.KeyRunes {
+			v.input += string(msg.Runes)
+		} else if msg.Type == tea.KeySpace {
+			v.input += " "
 		}
 	}
 	return v, nil

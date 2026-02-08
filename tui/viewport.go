@@ -6,8 +6,7 @@ package tui
 
 import (
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
+	"unicode/utf8"
 )
 
 // Viewport is a scrollable text area with pagination.
@@ -123,11 +122,7 @@ func (v *Viewport) Render() string {
 		visibleLines = append(visibleLines, "")
 	}
 
-	// Add scroll indicator
-	indicator := v.scrollIndicator()
-
-	content := strings.Join(visibleLines, "\n")
-	return lipgloss.JoinVertical(lipgloss.Left, content, indicator)
+	return strings.Join(visibleLines, "\n")
 }
 
 // renderScrolled returns lines with horizontal offset applied.
@@ -140,17 +135,18 @@ func (v *Viewport) renderScrolled() []string {
 	var lines []string
 	for i := v.scrollY; i < end; i++ {
 		line := v.content[i]
+		runes := []rune(line)
 		// Apply horizontal scroll
-		if v.scrollX > 0 && v.scrollX < len(line) {
-			line = line[v.scrollX:]
-		} else if v.scrollX >= len(line) {
-			line = ""
+		if v.scrollX > 0 && v.scrollX < len(runes) {
+			runes = runes[v.scrollX:]
+		} else if v.scrollX >= len(runes) {
+			runes = nil
 		}
 		// Truncate to width
-		if len(line) > v.width {
-			line = line[:v.width]
+		if len(runes) > v.width {
+			runes = runes[:v.width]
 		}
-		lines = append(lines, line)
+		lines = append(lines, string(runes))
 	}
 	return lines
 }
@@ -160,14 +156,16 @@ func (v *Viewport) renderWrapped() []string {
 	// First, wrap all content lines
 	var wrapped []string
 	for _, line := range v.content {
-		if len(line) <= v.width || v.width <= 0 {
+		rl := utf8.RuneCountInString(line)
+		if rl <= v.width || v.width <= 0 {
 			wrapped = append(wrapped, line)
 		} else {
-			for len(line) > v.width {
-				wrapped = append(wrapped, line[:v.width])
-				line = line[v.width:]
+			runes := []rune(line)
+			for len(runes) > v.width {
+				wrapped = append(wrapped, string(runes[:v.width]))
+				runes = runes[v.width:]
 			}
-			wrapped = append(wrapped, line)
+			wrapped = append(wrapped, string(runes))
 		}
 	}
 
@@ -197,10 +195,11 @@ func (v *Viewport) maxScrollY() int {
 	if v.wrapText && v.width > 0 {
 		total = 0
 		for _, line := range v.content {
-			if len(line) <= v.width {
+			rl := utf8.RuneCountInString(line)
+			if rl <= v.width {
 				total++
 			} else {
-				total += (len(line) + v.width - 1) / v.width
+				total += (rl + v.width - 1) / v.width
 			}
 		}
 	}
@@ -209,39 +208,4 @@ func (v *Viewport) maxScrollY() int {
 		return 0
 	}
 	return max
-}
-
-func (v *Viewport) scrollIndicator() string {
-	if len(v.content) <= v.height {
-		return ""
-	}
-
-	total := len(v.content)
-	pos := v.scrollY
-	pct := 0
-	if total > 0 {
-		pct = (pos * 100) / total
-	}
-
-	indicator := StyleDimmed.Render(
-		strings.Repeat("─", v.width-20) +
-			" " + itoa2(pct) + "% " +
-			"(" + itoa2(pos+1) + "/" + itoa2(total) + ")")
-
-	return indicator
-}
-
-func itoa2(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	if n < 0 {
-		return "-" + itoa2(-n)
-	}
-	s := ""
-	for n > 0 {
-		s = string(rune('0'+n%10)) + s
-		n /= 10
-	}
-	return s
 }

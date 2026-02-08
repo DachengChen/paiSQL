@@ -29,7 +29,8 @@ func NewStatsView(database *db.DB) *StatsView {
 	}
 }
 
-func (v *StatsView) Name() string { return "Stats" }
+func (v *StatsView) Name() string         { return "Stats" }
+func (v *StatsView) WantsTextInput() bool { return false }
 
 func (v *StatsView) SetSize(width, height int) {
 	v.width = width
