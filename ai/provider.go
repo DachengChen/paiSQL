@@ -26,6 +26,10 @@ type Provider interface {
 	// SuggestIndexes analyzes a query and suggests indexes.
 	SuggestIndexes(ctx context.Context, query string, explainJSON string) (string, error)
 
+	// GenerateQueryPlan takes a schema context and user question,
+	// returning a structured JSON query plan (not raw SQL).
+	GenerateQueryPlan(ctx context.Context, schemaContext string, userQuestion string, dataViewState string) (string, error)
+
 	// Name returns the provider name for display.
 	Name() string
 }

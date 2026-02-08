@@ -110,6 +110,14 @@ func (a *Antigravity) SuggestIndexes(ctx context.Context, query string, explainJ
 	return a.call(ctx, systemPromptIndex, messages)
 }
 
+func (a *Antigravity) GenerateQueryPlan(ctx context.Context, schemaContext string, userQuestion string, dataViewState string) (string, error) {
+	userContent := fmt.Sprintf("Schema:\n%s\n\nData view state:\n%s\n\nUser question: %s", schemaContext, dataViewState, userQuestion)
+	messages := []Message{
+		{Role: "user", Content: userContent},
+	}
+	return a.call(ctx, systemPromptQueryPlan, messages)
+}
+
 // IsLoggedIn returns true if valid credentials are cached.
 func (a *Antigravity) IsLoggedIn() bool {
 	a.mu.Lock()

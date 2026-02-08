@@ -75,6 +75,11 @@ type MainView struct {
 	chatMessages []ai.Message
 	chatLoading  bool
 
+	// Query plan state — tracks the last AI-generated plan for pagination
+	lastQueryPlan *ai.QueryPlan
+	planSortCol   string // saved sort column from last plan
+	planSortOrder string // saved sort order from last plan
+
 	// Fullscreen toggle (F5) — hides sidebar for clean text selection
 	fullscreen bool
 }
@@ -238,6 +243,79 @@ func (v *MainView) Update(msg tea.Msg) (View, tea.Cmd) {
 				Content: msg.Response,
 			})
 		}
+		v.viewport.SetContentLines(v.renderChatHistory())
+		v.viewport.End()
+		return v, nil
+
+	case QueryPlanMsg:
+		v.chatLoading = false
+		if msg.Err != nil {
+			v.chatMessages = append(v.chatMessages, ai.Message{
+				Role:    "assistant",
+				Content: "❌ Query plan error: " + msg.Err.Error(),
+			})
+			v.viewport.SetContentLines(v.renderChatHistory())
+			v.viewport.End()
+			return v, nil
+		}
+
+		plan := msg.Plan
+
+		// Handle "need_other_tables" response
+		if plan.NeedOtherTables {
+			v.chatMessages = append(v.chatMessages, ai.Message{
+				Role:    "assistant",
+				Content: "❌ Cannot satisfy this query with the current table and its related tables. Please select a different table or rephrase your question.",
+			})
+			v.viewport.SetContentLines(v.renderChatHistory())
+			v.viewport.End()
+			return v, nil
+		}
+
+		// Save the plan for pagination
+		v.lastQueryPlan = plan
+		if plan.Sort != nil {
+			v.planSortCol = plan.Sort.Column
+			v.planSortOrder = plan.Sort.Order
+		}
+
+		// Sync pagination state so PgUp/PgDn works
+		if len(plan.Tables) > 0 {
+			v.pagTable = plan.Tables[0]
+		}
+		v.pagPage = plan.Page - 1 // pagPage is 0-based
+		v.pagPageSize = plan.Limit
+
+		if plan.IsReadOnly() {
+			// SELECT: auto-execute with rich info (same as table browse)
+			v.chatMessages = append(v.chatMessages, ai.Message{
+				Role:    "assistant",
+				Content: fmt.Sprintf("📋 %s\n\n🔄 Executing query...", plan.Summary()),
+			})
+			v.viewport.SetContentLines(v.renderChatHistory())
+			v.viewport.End()
+
+			v.loading = true
+			return v, v.fetchQueryPlanPage(plan, msg.SQL)
+		}
+
+		// Modification: show SQL for review, don't auto-execute
+		var reviewLines []string
+		reviewLines = append(reviewLines, "⚠️  Modification Query — Review before executing")
+		reviewLines = append(reviewLines, "")
+		reviewLines = append(reviewLines, "📝 "+plan.Summary())
+		reviewLines = append(reviewLines, "")
+		reviewLines = append(reviewLines, "Generated SQL:")
+		reviewLines = append(reviewLines, "```")
+		reviewLines = append(reviewLines, msg.SQL)
+		reviewLines = append(reviewLines, "```")
+		reviewLines = append(reviewLines, "")
+		reviewLines = append(reviewLines, "Copy the SQL above and execute manually with SQL> prompt (F2 to switch).")
+
+		v.chatMessages = append(v.chatMessages, ai.Message{
+			Role:    "assistant",
+			Content: strings.Join(reviewLines, "\n"),
+		})
 		v.viewport.SetContentLines(v.renderChatHistory())
 		v.viewport.End()
 		return v, nil
@@ -620,6 +698,27 @@ func (v *MainView) sendChatMessage() tea.Cmd {
 	v.viewport.SetContentLines(v.renderChatHistory())
 	v.viewport.End()
 
+	// Check for pagination commands using the saved query plan
+	lowerText := strings.ToLower(text)
+	if v.lastQueryPlan != nil {
+		if strings.Contains(lowerText, "next page") {
+			v.lastQueryPlan.Page++
+			return v.executeQueryPlan(v.lastQueryPlan)
+		}
+		if strings.Contains(lowerText, "previous page") || strings.Contains(lowerText, "prev page") {
+			if v.lastQueryPlan.Page > 1 {
+				v.lastQueryPlan.Page--
+			}
+			return v.executeQueryPlan(v.lastQueryPlan)
+		}
+	}
+
+	// Check if a table is selected — if yes, use query plan generation
+	if v.tableIdx >= 0 && v.tableIdx < len(v.tables) && v.db != nil {
+		return v.generateQueryPlan(text)
+	}
+
+	// Fallback to regular chat if no table is selected
 	msgs := make([]ai.Message, len(v.chatMessages))
 	copy(msgs, v.chatMessages)
 
@@ -636,7 +735,156 @@ func (v *MainView) sendChatMessage() tea.Cmd {
 	}
 }
 
+// generateQueryPlan sends the user's question to the AI with full schema context
+// and parses the response into a structured query plan.
+func (v *MainView) generateQueryPlan(question string) tea.Cmd {
+	provider := v.aiProvider
+	database := v.db
+	table := v.tables[v.tableIdx]
+
+	// Build data view state string
+	var dataViewState string
+	if v.lastQueryPlan != nil {
+		dataViewState = fmt.Sprintf("Current table: %s, Page: %d, Limit: %d",
+			v.lastQueryPlan.Tables[0], v.lastQueryPlan.Page, v.lastQueryPlan.Limit)
+		if v.lastQueryPlan.Sort != nil {
+			dataViewState += fmt.Sprintf(", Sort: %s %s", v.lastQueryPlan.Sort.Column, v.lastQueryPlan.Sort.Order)
+		}
+	} else {
+		dataViewState = fmt.Sprintf("Current table: %s, Page: 1, Limit: 20", table)
+	}
+
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Fetch schema for the current table
+		mainSchema, err := database.FetchTableSchema(ctx, "public", table)
+		if err != nil {
+			return QueryPlanMsg{Err: fmt.Errorf("failed to fetch schema for %s: %w", table, err)}
+		}
+
+		// Fetch schemas for FK-related tables
+		relatedSchemas, err := database.FetchRelatedSchemas(ctx, "public", mainSchema)
+		if err != nil {
+			// Non-fatal — we can still generate a plan without related schemas
+			relatedSchemas = make(map[string]*db.TableSchema)
+		}
+
+		// Build the schema context text
+		schemaContext := db.FormatSchemaContext(mainSchema, relatedSchemas)
+
+		// Call AI to generate query plan
+		rawResponse, err := provider.GenerateQueryPlan(ctx, schemaContext, question, dataViewState)
+		if err != nil {
+			return QueryPlanMsg{Err: fmt.Errorf("AI error: %w", err), RawResponse: rawResponse}
+		}
+
+		// Parse the JSON response into a QueryPlan
+		plan, err := ai.ParseQueryPlan(rawResponse)
+		if err != nil {
+			return QueryPlanMsg{Err: err, RawResponse: rawResponse}
+		}
+
+		// Convert the plan to SQL
+		sql, err := plan.ToSQL()
+		if err != nil {
+			return QueryPlanMsg{Plan: plan, Err: fmt.Errorf("SQL generation error: %w", err), RawResponse: rawResponse}
+		}
+
+		return QueryPlanMsg{Plan: plan, SQL: sql, RawResponse: rawResponse}
+	}
+}
+
+// executeQueryPlan is used for pagination — it takes an existing plan and
+// re-generates the SQL with updated page/sort.
+func (v *MainView) executeQueryPlan(plan *ai.QueryPlan) tea.Cmd {
+	sql, err := plan.ToSQL()
+	if err != nil {
+		v.chatMessages = append(v.chatMessages, ai.Message{
+			Role:    "assistant",
+			Content: "❌ SQL generation error: " + err.Error(),
+		})
+		v.viewport.SetContentLines(v.renderChatHistory())
+		return nil
+	}
+
+	// Sync pagination state
+	v.pagPage = plan.Page - 1
+	v.pagPageSize = plan.Limit
+
+	v.chatMessages = append(v.chatMessages, ai.Message{
+		Role:    "assistant",
+		Content: fmt.Sprintf("📄 Page %d — Executing...", plan.Page),
+	})
+	v.viewport.SetContentLines(v.renderChatHistory())
+	v.viewport.End()
+
+	v.loading = true
+	v.chatLoading = false
+	return v.fetchQueryPlanPage(plan, sql)
+}
+
+// fetchQueryPlanPage executes a query plan's SQL and builds the same rich info
+// header as fetchPage() — table name, sizes, pagination, and sort info.
+func (v *MainView) fetchQueryPlanPage(plan *ai.QueryPlan, sql string) tea.Cmd {
+	mainTable := ""
+	if len(plan.Tables) > 0 {
+		mainTable = plan.Tables[0]
+	}
+	page := plan.Page
+	pageSize := plan.Limit
+	var sortInfo string
+	if plan.Sort != nil && plan.Sort.Column != "" {
+		sortInfo = fmt.Sprintf("  |  Sort: %s %s", plan.Sort.Column, strings.ToUpper(plan.Sort.Order))
+	}
+
+	database := v.db
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Get real row count for the main table
+		var total int64
+		if mainTable != "" {
+			countSQL := fmt.Sprintf("SELECT count(*) FROM %s", mainTable)
+			_ = database.Pool.QueryRow(ctx, countSQL).Scan(&total)
+		}
+
+		// Get table size info
+		var totalSize, tableSize, indexSize string
+		if mainTable != "" {
+			sizeSQL := `SELECT pg_size_pretty(pg_total_relation_size($1)),
+			                   pg_size_pretty(pg_relation_size($1)),
+			                   pg_size_pretty(pg_indexes_size($1))`
+			_ = database.Pool.QueryRow(ctx, sizeSQL, mainTable).Scan(&totalSize, &tableSize, &indexSize)
+		}
+
+		// Build info header (same format as fetchPage)
+		info := fmt.Sprintf("📊 %s  |  Total: %s  |  Table: %s  |  Indexes: %s  |  %d rows%s",
+			mainTable, totalSize, tableSize, indexSize, total, sortInfo)
+
+		// Add filter info if present
+		if len(plan.Filters) > 0 {
+			info += "  |  Filters: " + strings.Join(plan.Filters, ", ")
+		}
+
+		// Execute the query
+		result, err := database.Execute(ctx, sql)
+		if result != nil {
+			offset := (page - 1) * pageSize
+			lastRow := offset + result.RowCount
+			totalPages := maxPageCalc(total, int64(pageSize)) + 1
+			result.Status = fmt.Sprintf("Page %d/%d  |  Rows %d–%d of %d",
+				page, totalPages,
+				offset+1, lastRow,
+				total)
+		}
+
+		return QueryResultMsg{Result: result, Err: err, PagTotal: total, PagInfo: info}
+	}
+}
+
 // buildDBContext returns a system message with the current database context.
+// Used as fallback for regular chat when no table is selected.
 func (v *MainView) buildDBContext() string {
 	if v.db == nil {
 		return ""
@@ -655,26 +903,16 @@ func (v *MainView) buildDBContext() string {
 			sb.WriteString(fmt.Sprintf("Estimated rows: %d\n", v.tableRows[v.tableIdx]))
 		}
 
-		// Fetch column info
-		result, err := v.db.DescribeTable(context.Background(), "public", table)
-		if err == nil && result != nil && len(result.Rows) > 0 {
-			sb.WriteString("\nColumns:\n")
-			for _, row := range result.Rows {
-				if len(row) >= 4 {
-					// column_name, data_type, is_nullable, default, key
-					line := fmt.Sprintf("  - %s %s", row[0], row[1])
-					if len(row) >= 5 && row[4] != "" {
-						line += " (" + row[4] + ")"
-					}
-					if row[2] == "NO" {
-						line += " NOT NULL"
-					}
-					if row[3] != "" {
-						line += " DEFAULT " + row[3]
-					}
-					sb.WriteString(line + "\n")
-				}
+		// Fetch full schema (columns + FKs)
+		ctx := context.Background()
+		mainSchema, err := v.db.FetchTableSchema(ctx, "public", table)
+		if err == nil && mainSchema != nil {
+			relatedSchemas, _ := v.db.FetchRelatedSchemas(ctx, "public", mainSchema)
+			if relatedSchemas == nil {
+				relatedSchemas = make(map[string]*db.TableSchema)
 			}
+			sb.WriteString("\n")
+			sb.WriteString(db.FormatSchemaContext(mainSchema, relatedSchemas))
 		}
 	}
 

@@ -41,6 +41,14 @@ func (g *Gemini) SuggestIndexes(ctx context.Context, query string, explainJSON s
 	return g.call(ctx, systemPromptIndex, messages)
 }
 
+func (g *Gemini) GenerateQueryPlan(ctx context.Context, schemaContext string, userQuestion string, dataViewState string) (string, error) {
+	userContent := fmt.Sprintf("Schema:\n%s\n\nData view state:\n%s\n\nUser question: %s", schemaContext, dataViewState, userQuestion)
+	messages := []Message{
+		{Role: "user", Content: userContent},
+	}
+	return g.call(ctx, systemPromptQueryPlan, messages)
+}
+
 func (g *Gemini) call(ctx context.Context, system string, messages []Message) (string, error) {
 	type part struct {
 		Text string `json:"text"`

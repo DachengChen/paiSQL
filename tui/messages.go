@@ -4,7 +4,10 @@
 // TUI via these message types, ensuring the UI never blocks.
 package tui
 
-import "github.com/DachengChen/paiSQL/db"
+import (
+	"github.com/DachengChen/paiSQL/ai"
+	"github.com/DachengChen/paiSQL/db"
+)
 
 // QueryResultMsg is sent when a SQL query completes.
 type QueryResultMsg struct {
@@ -62,6 +65,14 @@ type LogMsg struct {
 
 // StatusMsg is a transient status message for the status bar.
 type StatusMsg string
+
+// QueryPlanMsg is sent when an AI query plan generation completes.
+type QueryPlanMsg struct {
+	Plan        *ai.QueryPlan // parsed query plan
+	SQL         string        // generated SQL from the plan
+	RawResponse string        // raw AI response (for debugging)
+	Err         error
+}
 
 // AntigravityLoginMsg is sent when Google Antigravity OAuth login completes.
 type AntigravityLoginMsg struct {

@@ -63,6 +63,25 @@ func (p *Placeholder) SuggestIndexes(ctx context.Context, query string, explainJ
 	return strings.Join(suggestions, "\n"), nil
 }
 
+func (p *Placeholder) GenerateQueryPlan(ctx context.Context, schemaContext string, userQuestion string, dataViewState string) (string, error) {
+	select {
+	case <-time.After(300 * time.Millisecond):
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+
+	return `{
+  "tables": ["placeholder_table"],
+  "joins": [],
+  "filters": [],
+  "select": ["*"],
+  "limit": 20,
+  "page": 1,
+  "action": "select",
+  "description": "Placeholder query plan. Configure a real AI provider for actual query planning."
+}`, nil
+}
+
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
