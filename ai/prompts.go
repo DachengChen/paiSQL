@@ -75,11 +75,16 @@ When the user mentions a condition:
    - Use the referenced table's columns
 3. Generate: "<table>.<column> <operator> <value>"
 
+IMPORTANT for string filters:
+- ALWAYS use ILIKE instead of = for text/varchar comparisons, because data may be stored in any case (e.g., 'CHINA', 'china', 'China')
+- Example: "country.name ILIKE 'China'" (this matches CHINA, china, China, etc.)
+- For numeric or boolean comparisons, use = as normal
+
 Example:
 - User: "List 10 Chinese companies"
 - Current table: company (no country name column, but company.country_id → country.id)
 - country has column "name"
-→ Filter: "country.name = 'China'"
+→ Filter: "country.name ILIKE 'China'"
 
 ## Select columns
 

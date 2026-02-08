@@ -68,7 +68,7 @@ func (d *DB) FetchTableSchema(ctx context.Context, schema, table string) (*Table
 		ts.Columns = append(ts.Columns, col)
 	}
 
-	// Fetch foreign keys
+	// Fetch formal foreign keys
 	fkResult, err := d.TableForeignKeys(ctx, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("foreign keys %s: %w", table, err)
@@ -87,7 +87,53 @@ func (d *DB) FetchTableSchema(ctx context.Context, schema, table string) (*Table
 		ts.ForeignKeys = append(ts.ForeignKeys, fk)
 	}
 
+	// If no formal FKs found, detect implicit FKs from *_id column naming convention.
+	// Many databases use "country_id" → country.id without formal constraints.
+	if len(ts.ForeignKeys) == 0 {
+		implicitFKs := d.detectImplicitFKs(ctx, schema, ts)
+		ts.ForeignKeys = append(ts.ForeignKeys, implicitFKs...)
+	}
+
 	return ts, nil
+}
+
+// detectImplicitFKs scans columns ending in "_id" and checks if a matching
+// table exists. This handles the common convention where FK relationships
+// are implied by naming but not enforced by constraints.
+func (d *DB) detectImplicitFKs(ctx context.Context, schema string, ts *TableSchema) []ForeignKeyInfo {
+	var fks []ForeignKeyInfo
+
+	for _, col := range ts.Columns {
+		if col.IsPK {
+			continue // skip the table's own PK
+		}
+		if !strings.HasSuffix(col.Name, "_id") {
+			continue
+		}
+
+		// "country_id" → "country"
+		refTable := strings.TrimSuffix(col.Name, "_id")
+
+		// Check if that table actually exists
+		var exists bool
+		checkSQL := `SELECT EXISTS(
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = $1 AND table_name = $2
+		)`
+		err := d.Pool.QueryRow(ctx, checkSQL, schema, refTable).Scan(&exists)
+		if err != nil || !exists {
+			continue
+		}
+
+		fks = append(fks, ForeignKeyInfo{
+			ConstraintName: "(implicit)",
+			Column:         col.Name,
+			ForeignTable:   refTable,
+			ForeignColumn:  "id",
+		})
+	}
+
+	return fks
 }
 
 // FetchRelatedSchemas retrieves schemas for all tables referenced by
